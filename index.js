@@ -118,11 +118,15 @@ app.post('/webhook', async (req, res) => {
 
     // ── Busca cliente pelo telefone ───────────────────
     const telefoneLimpo = telefone.replace(/\D/g, '');
-    const { data: clientes } = await supabase
+    console.log(`🔍 Buscando cliente com whatsapp: ${telefoneLimpo}`);
+
+    const { data: clientes, error: erroCliente } = await supabase
       .from('clientes')
       .select('*')
       .eq('whatsapp', telefoneLimpo)
       .limit(1);
+
+    console.log(`📋 Clientes encontrados: ${JSON.stringify(clientes)} | Erro: ${erroCliente?.message}`);
 
     const cliente = clientes?.[0];
 
