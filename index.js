@@ -169,7 +169,7 @@ app.post('/webhook', async (req, res) => {
             `✅ Página publicada com sucesso!\n\n👉 ${url}\n\nEm até 2 minutos já aparece atualizada 😊`
           );
         } catch (e) {
-          console.error('Erro ao publicar:', e.message);
+          console.error('Erro ao publicar:', e.message, JSON.stringify(e.response?.data));
           await enviarWhatsApp(telefone, '❌ Erro ao publicar. Tente novamente ou entre em contato com o suporte.');
           await setEstado(telefone, 'aguardando_instrucao', null);
         }
