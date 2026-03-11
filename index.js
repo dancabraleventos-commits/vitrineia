@@ -1,7 +1,6 @@
 const express = require('express');
 const axios = require('axios');
 const { createClient } = require('@supabase/supabase-js');
-
 const app = express();
 app.use(express.json());
 
@@ -86,7 +85,8 @@ async function publicarVercel(slug, htmlContent) {
       }],
       projectSettings: { framework: null },
       target: 'production',
-      aliases: [`${slug}.vitrineia.com.br`]
+      const deployUrl = res.data.url ? `https://${res.data.url}` : `https://${slug}.vitrineia.com.br`;
+return deployUrl;
     },
     {
       headers: {
