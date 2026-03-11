@@ -95,7 +95,6 @@ return deployUrl;
       }
     }
   );
-  return `https://${slug}.vitrineia.com.br`;
 }
 
 // ════════════════════════════════════════════════════════
