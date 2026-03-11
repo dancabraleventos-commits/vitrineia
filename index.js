@@ -12,7 +12,7 @@ const supabase = createClient(
 );
 
 // ── Enviar mensagem via Z-API ─────────────────────────
-async function enviarwhatsapp(telefone, mensagem) {
+async function enviarWhatsApp(telefone, mensagem) {
   const url = `https://api.z-api.io/instances/${process.env.ZAPI_INSTANCE}/token/${process.env.ZAPI_TOKEN}/send-text`;
   await axios.post(url, { phone: telefone, message: mensagem }, {
     headers: { 'Client-Token': process.env.ZAPI_CLIENT_TOKEN }
