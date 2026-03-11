@@ -1,16 +1,15 @@
 const express = require('express');
 const axios = require('axios');
 const { createClient } = require('@supabase/supabase-js');
+
 const app = express();
 app.use(express.json());
 
-// ── Clientes das APIs ─────────────────────────────────
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_KEY
 );
 
-// ── Enviar mensagem via Z-API ─────────────────────────
 async function enviarWhatsApp(telefone, mensagem) {
   const url = `https://api.z-api.io/instances/${process.env.ZAPI_INSTANCE}/token/${process.env.ZAPI_TOKEN}/send-text`;
   await axios.post(url, { phone: telefone, message: mensagem }, {
@@ -18,7 +17,6 @@ async function enviarWhatsApp(telefone, mensagem) {
   });
 }
 
-// ── Chamar Claude API ─────────────────────────────────
 async function chamarClaude(system, mensagem, maxTokens = 1000) {
   const res = await axios.post('https://api.anthropic.com/v1/messages', {
     model: 'claude-sonnet-4-6',
@@ -35,7 +33,6 @@ async function chamarClaude(system, mensagem, maxTokens = 1000) {
   return res.data.content[0].text;
 }
 
-// ── Buscar ou criar estado da conversa ────────────────
 async function getEstado(telefone, clienteId) {
   const { data } = await supabase
     .from('conversas_admin')
@@ -61,7 +58,6 @@ async function setEstado(telefone, estado, acaoPendente = null) {
     .eq('telefone', telefone);
 }
 
-// ── Buscar HTML atual da página do cliente ────────────
 async function getHtmlAtual(clienteId) {
   const { data } = await supabase
     .from('paginas')
@@ -69,24 +65,18 @@ async function getHtmlAtual(clienteId) {
     .eq('cliente_id', clienteId)
     .order('created_at', { ascending: false })
     .limit(1)
-    .single();
+    .maybeSingle();
   return data;
 }
 
-// ── Publicar no Vercel ────────────────────────────────
 async function publicarVercel(slug, htmlContent) {
   const res = await axios.post(
     'https://api.vercel.com/v13/deployments',
     {
       name: process.env.VERCEL_PROJECT_NAME || 'vitrineia',
-      files: [{
-        file: 'index.html',
-        data: htmlContent
-      }],
+      files: [{ file: 'index.html', data: htmlContent }],
       projectSettings: { framework: null },
-      target: 'production',
-      const deployUrl = res.data.url ? `https://${res.data.url}` : `https://${slug}.vitrineia.com.br`;
-return deployUrl;
+      target: 'production'
     },
     {
       headers: {
@@ -95,29 +85,24 @@ return deployUrl;
       }
     }
   );
+  return res.data.url ? `https://${res.data.url}` : `https://${slug}.vitrineia.com.br`;
 }
 
-// ════════════════════════════════════════════════════════
-// WEBHOOK PRINCIPAL
-// ════════════════════════════════════════════════════════
 app.post('/webhook', async (req, res) => {
-  res.status(200).send('ok'); // Responde Z-API imediatamente
+  res.status(200).send('ok');
 
   try {
     const body = req.body;
     const telefone = body.phone || body.from || '';
     const mensagem = body.text?.message || body.message || '';
 
-    // Ignora mensagens próprias e status
     if (!mensagem || body.fromMe === true || body.isStatusReply === true) return;
-    // Ignora grupos
     if (telefone.includes('@g.us') || telefone.includes('-')) return;
 
     console.log(`📩 Mensagem de ${telefone}: ${mensagem}`);
 
-    // ── Busca cliente pelo telefone ───────────────────
     const telefoneLimpo = telefone.replace(/\D/g, '');
-    console.log(`🔍 Buscando cliente com telefone: ${telefoneLimpo}`);
+    console.log(`🔍 Buscando cliente pelo telefone: ${telefoneLimpo}`);
 
     const { data: clientes, error: erroCliente } = await supabase
       .from('clientes')
@@ -125,7 +110,7 @@ app.post('/webhook', async (req, res) => {
       .eq('telefone', telefoneLimpo)
       .limit(1);
 
-    console.log(`📋 Clientes encontrados: ${JSON.stringify(clientes)} | Erro: ${erroCliente?.message}`);
+    console.log(`📋 Clientes: ${JSON.stringify(clientes)} | Erro: ${erroCliente?.message}`);
 
     const cliente = clientes?.[0];
 
@@ -134,39 +119,25 @@ app.post('/webhook', async (req, res) => {
       return;
     }
 
-    console.log(`✅ Cliente identificado: ${cliente.nome_negocio || cliente.nome}`);
+    console.log(`✅ Cliente: ${cliente.nome}`);
 
-    // ── Busca estado da conversa ──────────────────────
     const conversa = await getEstado(telefone, cliente.id);
     const estado = conversa?.estado || 'aguardando_instrucao';
+    console.log(`📌 Estado: ${estado}`);
 
-    console.log(`📌 Estado atual: ${estado}`);
-
-    // ════════════════════════════════════════════════
-    // ESTADO: aguardando_aprovacao_pagina
-    // ════════════════════════════════════════════════
     if (estado === 'aguardando_aprovacao_pagina') {
       const msg = mensagem.toLowerCase().trim();
       const acaoPendente = conversa.acao_pendente;
 
-      // PUBLICAR
       if (msg.includes('publicar') || msg === 'ok' || msg === 'sim' || msg === '1') {
         await enviarWhatsApp(telefone, '⏳ Publicando sua página, aguarde alguns segundos...');
-
         try {
           const url = await publicarVercel(acaoPendente.slug, acaoPendente.html_novo);
-
-          // Atualiza HTML no Supabase
-          await supabase
-            .from('paginas')
+          await supabase.from('paginas')
             .update({ html_completo: acaoPendente.html_novo, url_publica: url })
             .eq('cliente_id', cliente.id);
-
           await setEstado(telefone, 'aguardando_instrucao', null);
-
-          await enviarWhatsApp(telefone,
-            `✅ Página publicada com sucesso!\n\n👉 ${url}\n\nEm até 2 minutos já aparece atualizada 😊`
-          );
+          await enviarWhatsApp(telefone, `✅ Página publicada!\n\n👉 ${url}\n\nEm até 2 minutos já aparece atualizada 😊`);
         } catch (e) {
           console.error('Erro ao publicar:', e.message, JSON.stringify(e.response?.data));
           await enviarWhatsApp(telefone, '❌ Erro ao publicar. Tente novamente ou entre em contato com o suporte.');
@@ -175,19 +146,15 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
-      // CANCELAR
       if (msg.includes('cancelar') || msg === 'não' || msg === 'nao' || msg === '3') {
         await setEstado(telefone, 'aguardando_instrucao', null);
         await enviarWhatsApp(telefone, 'Ok, descartei as alterações 👍\nSua página atual continua no ar.');
         return;
       }
 
-      // AJUSTAR
       if (msg.includes('ajusta') || msg.includes('muda') || msg.includes('corrige') || msg === '2') {
         await enviarWhatsApp(telefone, '⏳ Aplicando o ajuste...');
-
         const instrucaoAjuste = mensagem.replace(/^(ajusta|muda|corrige)\s*/i, '').trim() || mensagem;
-
         const htmlAjustado = await chamarClaude(
           `Você é especialista em HTML para landing pages.
 INSTRUÇÃO: "${instrucaoAjuste}"
@@ -195,58 +162,31 @@ HTML ATUAL:
 ${acaoPendente.html_novo}
 Aplique SOMENTE a alteração pedida. Mantenha todo estilo e estrutura.
 Retorne APENAS o HTML completo modificado. Zero explicações.`,
-          instrucaoAjuste,
-          4000
+          instrucaoAjuste, 4000
         );
-
-        await setEstado(telefone, 'aguardando_aprovacao_pagina', {
-          ...acaoPendente,
-          html_novo: htmlAjustado
-        });
-
+        await setEstado(telefone, 'aguardando_aprovacao_pagina', { ...acaoPendente, html_novo: htmlAjustado });
         await enviarWhatsApp(telefone,
-          `✏️ Ajuste aplicado!\n\nPrevisualize: ${acaoPendente.url_atual}\n\nResponda:\n✅ *publicar* — colocar no ar\n✏️ *ajusta [mais alguma coisa]* — novo ajuste\n❌ *cancelar* — descartar`
+          `✏️ Ajuste aplicado!\n\nResponda:\n✅ *publicar* — colocar no ar\n✏️ *ajusta [mais alguma coisa]* — novo ajuste\n❌ *cancelar* — descartar`
         );
         return;
       }
 
-      // Resposta não reconhecida
       await enviarWhatsApp(telefone,
         `Não entendi 😊 Responda:\n\n✅ *publicar* — colocar no ar\n✏️ *ajusta [o que mudar]* — novo ajuste\n❌ *cancelar* — descartar`
       );
       return;
     }
 
-    // ════════════════════════════════════════════════
-    // ESTADO: aguardando_instrucao
-    // ════════════════════════════════════════════════
-    const nomeNegocio = cliente.nome_negocio || cliente.nome || 'seu negócio';
-    const categoria = cliente.categoria || '';
+    const nomeNegocio = cliente.nome || 'seu negócio';
+    const categoria = cliente.segmento || '';
     const cidade = cliente.cidade || '';
 
     const intencaoRaw = await chamarClaude(
       `Você é o assistente técnico da VitrineIA.
-Um cliente ativo mandou uma mensagem no suporte.
-
-DADOS DO CLIENTE:
-Nome do negócio: ${nomeNegocio}
-Categoria: ${categoria}
-Cidade: ${cidade}
-
+DADOS DO CLIENTE: Nome: ${nomeNegocio}, Categoria: ${categoria}, Cidade: ${cidade}
 Identifique a intenção e retorne SOMENTE JSON válido sem markdown:
-{
-  "intencao": "editar_pagina" | "regerar_pagina" | "duvida" | "outro",
-  "instrucao_clara": "o que exatamente precisa ser feito",
-  "resposta_direta": "resposta se for duvida ou outro"
-}
-
-Exemplos:
-"muda meu horário para 9h às 19h" → editar_pagina
-"adiciona o serviço delivery" → editar_pagina
-"refaz minha página" → regerar_pagina
-"como cancelo?" → duvida`,
-      mensagem,
-      500
+{"intencao":"editar_pagina"|"regerar_pagina"|"duvida"|"outro","instrucao_clara":"o que fazer","resposta_direta":"resposta se duvida"}`,
+      mensagem, 500
     );
 
     let intencao = 'duvida';
@@ -262,15 +202,13 @@ Exemplos:
       respostaDireta = intencaoRaw;
     }
 
-    console.log(`🎯 Intenção detectada: ${intencao} — ${instrucao}`);
+    console.log(`🎯 Intenção: ${intencao} — ${instrucao}`);
 
-    // ── Dúvida ou outro ───────────────────────────────
     if (intencao === 'duvida' || intencao === 'outro') {
       await enviarWhatsApp(telefone, respostaDireta);
       return;
     }
 
-    // ── Editar ou regerar página ──────────────────────
     if (intencao === 'editar_pagina' || intencao === 'regerar_pagina') {
       await enviarWhatsApp(telefone, `⚙️ Entendido! Estou gerando a nova versão da sua página...\n\nIsso leva cerca de 30 segundos 😊`);
 
@@ -281,41 +219,17 @@ Exemplos:
         return;
       }
 
-      let htmlNovo;
-
-      if (intencao === 'regerar_pagina') {
-        htmlNovo = await chamarClaude(
-          `Você é especialista em landing pages para comércios locais brasileiros.
-Crie uma landing page profissional completa em HTML para:
-Nome: ${nomeNegocio}
-Categoria: ${categoria}
-Cidade: ${cidade}
-Use como referência o estilo e informações da página atual abaixo.
-Retorne APENAS o HTML completo. Zero explicações.
-
-PÁGINA ATUAL PARA REFERÊNCIA:
-${paginaAtual.html_completo.substring(0, 3000)}`,
-          instrucao,
-          8000
-        );
-      } else {
-        htmlNovo = await chamarClaude(
-          `Você é especialista em HTML para landing pages.
+      const htmlNovo = await chamarClaude(
+        `Você é especialista em HTML para landing pages.
 NEGÓCIO: ${nomeNegocio} — ${categoria} — ${cidade}
 INSTRUÇÃO: "${instrucao}"
-
 HTML ATUAL:
 ${paginaAtual.html_completo}
-
-Aplique SOMENTE a alteração pedida. Não mude nada além do que foi solicitado.
-Mantenha todo estilo, cores e estrutura.
+Aplique SOMENTE a alteração pedida. Mantenha todo estilo, cores e estrutura.
 Retorne APENAS o HTML completo modificado. Zero explicações.`,
-          instrucao,
-          8000
-        );
-      }
+        instrucao, 8000
+      );
 
-      // Salva em acao_pendente
       await setEstado(telefone, 'aguardando_aprovacao_pagina', {
         html_novo: htmlNovo,
         html_original: paginaAtual.html_completo,
@@ -324,7 +238,7 @@ Retorne APENAS o HTML completo modificado. Zero explicações.`,
       });
 
       await enviarWhatsApp(telefone,
-        `✅ Pronto! Gerei a nova versão da sua página.\n\n📄 Prévia da página atual: ${paginaAtual.url_publica}\n_(a nova versão só vai no ar quando você aprovar)_\n\nResponda:\n✅ *publicar* — colocar no ar agora\n✏️ *ajusta [o que mudar]* — fazer mais algum ajuste\n❌ *cancelar* — descartar`
+        `✅ Pronto! Gerei a nova versão da sua página.\n\n📄 Prévia atual: ${paginaAtual.url_publica}\n_(a nova versão só vai no ar quando você aprovar)_\n\nResponda:\n✅ *publicar* — colocar no ar agora\n✏️ *ajusta [o que mudar]* — fazer mais algum ajuste\n❌ *cancelar* — descartar`
       );
     }
 
@@ -333,7 +247,6 @@ Retorne APENAS o HTML completo modificado. Zero explicações.`,
   }
 });
 
-// Health check
 app.get('/', (req, res) => res.send('VitrineIA Admin ✅'));
 
 const PORT = process.env.PORT || 3000;
