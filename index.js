@@ -42,7 +42,7 @@ async function getEstado(telefone, clienteId) {
     .from('conversas_admin')
     .select('*')
     .eq('telefone', telefone)
-    .single();
+    .maybeSingle();
 
   if (data) return data;
 
@@ -50,7 +50,7 @@ async function getEstado(telefone, clienteId) {
     .from('conversas_admin')
     .insert({ telefone, cliente_id: clienteId, estado: 'aguardando_instrucao' })
     .select()
-    .single();
+    .maybeSingle();
 
   return novo;
 }
