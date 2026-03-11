@@ -114,7 +114,8 @@ app.post('/webhook', async (req, res) => {
     // Ignora grupos
     if (telefone.includes('@g.us') || telefone.includes('-')) return;
 
-    console.log(`📩 Mensagem de ${telefone}: ${mensagem}`);
+    console.log(`📦 Body bruto: ${JSON.stringify(body).substring(0, 500)}`);
+console.log(`📩 telefone: ${telefone} | msg: ${mensagem} | fromMe: ${body.fromMe}`);
 
     // ── Busca cliente pelo telefone ───────────────────
     const telefoneLimpo = telefone.replace(/\D/g, '');
