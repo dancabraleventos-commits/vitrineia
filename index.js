@@ -121,7 +121,7 @@ app.post('/webhook', async (req, res) => {
     const { data: clientes } = await supabase
       .from('clientes')
       .select('*')
-      .or(`whatsapp.eq.${telefoneLimpo},whatsapp.eq.+${telefoneLimpo},whatsapp.eq.55${telefoneLimpo}`)
+      .eq('WhatsApp', telefoneLimpo)
       .limit(1);
 
     const cliente = clientes?.[0];
