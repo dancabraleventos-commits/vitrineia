@@ -114,17 +114,16 @@ app.post('/webhook', async (req, res) => {
     // Ignora grupos
     if (telefone.includes('@g.us') || telefone.includes('-')) return;
 
-    console.log(`📦 Body bruto: ${JSON.stringify(body).substring(0, 500)}`);
-console.log(`📩 telefone: ${telefone} | msg: ${mensagem} | fromMe: ${body.fromMe}`);
+    console.log(`📩 Mensagem de ${telefone}: ${mensagem}`);
 
     // ── Busca cliente pelo telefone ───────────────────
     const telefoneLimpo = telefone.replace(/\D/g, '');
-    console.log(`🔍 Buscando cliente com whatsapp: ${telefoneLimpo}`);
+    console.log(`🔍 Buscando cliente com telefone: ${telefoneLimpo}`);
 
     const { data: clientes, error: erroCliente } = await supabase
       .from('clientes')
       .select('*')
-      .eq('whatsapp', telefoneLimpo)
+      .eq('telefone', telefoneLimpo)
       .limit(1);
 
     console.log(`📋 Clientes encontrados: ${JSON.stringify(clientes)} | Erro: ${erroCliente?.message}`);
