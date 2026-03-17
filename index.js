@@ -529,7 +529,11 @@ Zero explicações, só JSON.`,
         };
         const valorAddons = dados.addons.reduce((sum, a) => sum + (precos[a] || 0), 0);
         const valorDominio = dados.addon_dominio ? 9.90 : 0;
-        const valorTotal = 47 + valorAddons + valorDominio;
+
+        // Aplicar desconto no plano base (primeiro mês) para leads com origem Permutaí
+        const descontoPct = cliente?.desconto_primeiro_mes || 0;
+        const valorBase   = descontoPct > 0 ? 47 * (100 - descontoPct) / 100 : 47;
+        const valorTotal  = valorBase + valorAddons + valorDominio;
 
         const addonsNomes = {
           agendamento: '📅 Agendamento Online',
@@ -541,12 +545,23 @@ Zero explicações, só JSON.`,
 
         const listaAddons = dados.addons.map(a => addonsNomes[a] || a).join('\n');
 
+        const linhaDesconto = descontoPct > 0
+          ? `\n🎁 *${descontoPct}% OFF no 1º mês* (a partir do 2º mês: R$${(47 + valorAddons + valorDominio).toFixed(2)})`
+          : '';
+
         await enviarComDelay(telefone, [
           `Perfeito! Vou ativar pra você:${dados.addon_dominio ? '\n🌐 Domínio próprio' : ''}\n${listaAddons}`,
-          `Valor total: *R$${valorTotal.toFixed(2)}/mês* 😊`,
+          `Valor total: *R$${valorTotal.toFixed(2)}/mês*${linhaDesconto} 😊`,
         ]);
         await delay(1000);
-        await iniciarGeracaoPagina(telefone, dados, cliente);
+        // Se tem Instagram, coletar @ antes de gerar a página
+        const temInstagram = dados.addons.some(a => a.includes('instagram'));
+        if (temInstagram) {
+          await enviarWhatsApp(telefone, `Você tem Instagram do negócio? Me manda o @ para ativar a publicação automática 😊`);
+          await setEstado(telefone, 'coletando_instagram');
+        } else {
+          await iniciarGeracaoPagina(telefone, dados, cliente);
+        }
       } catch (e) {
         // Se não conseguiu interpretar, perguntar de novo
         await enviarWhatsApp(telefone, `Me fala quais te interessaram ou se prefere seguir sem add-ons por enquanto 😊`);
@@ -557,6 +572,43 @@ Zero explicações, só JSON.`,
     case 'gerando_pagina': {
       // Cliente mandou mensagem enquanto página está sendo gerada
       await enviarWhatsApp(telefone, `Ainda estou montando sua página, ${nomeCliente}! Mais alguns segundinhos 😊`);
+      return true;
+    }
+
+    case 'permutai_aguardando_confirmacao': {
+      const msg = mensagem.toLowerCase().trim();
+      const positivo = ['sim', 's', 'ok', 'pode', 'claro', 'vamos', 'bora', 'isso', 'correto', 'certo', 'exato'];
+
+      if (positivo.some(p => msg.includes(p))) {
+        // Nome e categoria já preenchidos — pula direto para endereço
+        await enviarWhatsApp(telefone, `Ótimo! 😊 Qual o *endereço completo* do seu negócio? (rua, número, bairro e cidade)`);
+        await setEstado(telefone, 'coletando_endereco');
+      } else if (msg.includes('não') || msg.includes('nao')) {
+        await enviarWhatsApp(telefone, `Sem problema! Me fala como está certo que eu ajusto 😊`);
+        await setEstado(telefone, 'coletando_nome');
+      } else {
+        await enviarWhatsApp(telefone, `Confirma pra mim: você atua em *${dados.cidade || 'sua cidade'}* com *${dados.categoria || 'sua especialidade'}*? Responde *SIM* para continuar 😊`);
+      }
+      return true;
+    }
+
+    case 'coletando_instagram': {
+      const handle = mensagem.trim().replace(/^@/, '');
+      if (!handle || handle.length < 2) {
+        await enviarWhatsApp(telefone, `Me manda o @ do Instagram do negócio 😊 Exemplo: @meunegocio`);
+        return true;
+      }
+      dados.instagram_handle = handle;
+      await setDadosOnboarding(telefone, dados);
+      await supabase.from('clientes').update({ instagram_handle: handle }).eq('id', cliente.id);
+
+      const oauthLink = buildInstagramOAuthLink(cliente.id);
+      await enviarComDelay(telefone, [
+        `Perfeito! Anotei o @${handle} 😊`,
+        `Para ativar a publicação automática, preciso que você autorize o acesso:\n\n${oauthLink}\n\nÉ só clicar e aprovar — bem rápido!`,
+        `Enquanto isso, já vou montar sua página! 😊`,
+      ]);
+      await iniciarGeracaoPagina(telefone, dados, cliente);
       return true;
     }
 
@@ -861,7 +913,8 @@ app.post('/webhook', async (req, res) => {
       'coletando_diferencial', 'coletando_logo',
       'confirmando_dados', 'corrigindo_dados',
       'oferecendo_dominio', 'coletando_dominio_proprio', 'decidindo_dominio',
-      'oferecendo_addons', 'gerando_pagina'
+      'oferecendo_addons', 'coletando_instagram', 'gerando_pagina',
+      'permutai_aguardando_confirmacao'
     ];
 
     if (estadosOnboarding.includes(estado)) {
@@ -979,6 +1032,35 @@ Retorne APENAS o HTML completo modificado. Zero explicações.`,
     }
 
     // ═══════════════════════════════════════
+    // APROVAÇÃO DE POST INSTAGRAM
+    // ═══════════════════════════════════════
+
+    if (estado === 'aguardando_aprovacao_post_instagram') {
+      const msg = mensagem.toLowerCase().trim();
+      const acaoPendente = conversa.acao_pendente;
+
+      if (msg === 'sim' || msg.startsWith('sim') || msg.includes('publica') || msg.includes('pode')) {
+        await setEstado(telefone, 'aguardando_instrucao', null);
+        try {
+          await publicarPostInstagram(acaoPendente.cliente_id, acaoPendente.imagem_url, acaoPendente.legenda, telefone);
+        } catch (e) {
+          console.error('❌ Erro ao publicar após aprovação:', e.message);
+          await enviarWhatsApp(telefone, `Ops, tive um problema ao publicar 😅 Vou tentar novamente em breve!`);
+        }
+        return;
+      }
+
+      if (msg === 'não' || msg === 'nao' || msg.startsWith('não') || msg.startsWith('nao')) {
+        await setEstado(telefone, 'aguardando_instrucao', null);
+        await enviarWhatsApp(telefone, `Tudo bem, não vou publicar esse post 😊 Se quiser ajustar algo ou pular, é só me chamar!`);
+        return;
+      }
+
+      await enviarWhatsApp(telefone, `Responde *SIM* para publicar ou *NÃO* para cancelar 😊`);
+      return;
+    }
+
+    // ═══════════════════════════════════════
     // CLIENTE ATIVO — SUPORTE CONTÍNUO
     // ═══════════════════════════════════════
 
@@ -994,6 +1076,501 @@ Retorne APENAS o HTML completo modificado. Zero explicações.`,
 
   } catch (err) {
     console.error('❌ Erro no webhook:', err.message, err.stack);
+  }
+});
+
+// ═══════════════════════════════════════
+// INSTAGRAM — HELPERS
+// ═══════════════════════════════════════
+
+function buildInstagramOAuthLink(clienteId) {
+  const appId = process.env.META_APP_ID;
+  const redirectUri = encodeURIComponent(process.env.META_REDIRECT_URI || '');
+  const scope = 'instagram_basic,instagram_content_publish';
+  return `https://api.instagram.com/oauth/authorize?client_id=${appId}&redirect_uri=${redirectUri}&scope=${scope}&response_type=code&state=${clienteId}`;
+}
+
+async function publicarPostInstagram(clienteId, imagemUrl, legenda, telefoneCliente) {
+  const { data: cliente } = await supabase
+    .from('clientes')
+    .select('instagram_access_token, instagram_user_id, telefone, nome_contato, nome')
+    .eq('id', clienteId)
+    .maybeSingle();
+
+  if (!cliente?.instagram_access_token || !cliente?.instagram_user_id) {
+    throw new Error('Cliente sem Instagram conectado');
+  }
+
+  const { instagram_access_token: token, instagram_user_id: userId } = cliente;
+
+  // Passo 1 — Criar container de mídia
+  const containerRes = await axios.post(
+    `https://graph.instagram.com/v18.0/${userId}/media`,
+    null,
+    { params: { image_url: imagemUrl, caption: legenda, access_token: token } }
+  );
+  const creationId = containerRes.data.id;
+
+  // Passo 2 — Publicar container
+  await axios.post(
+    `https://graph.instagram.com/v18.0/${userId}/media_publish`,
+    null,
+    { params: { creation_id: creationId, access_token: token } }
+  );
+
+  // Confirmar via WhatsApp
+  const phoneDestino = telefoneCliente || cliente.telefone;
+  if (phoneDestino) {
+    const nome = cliente.nome_contato || cliente.nome || '';
+    await enviarWhatsApp(phoneDestino, `✅ Post publicado no Instagram${nome ? `, ${nome}` : ''}! Seu conteúdo está no ar 😊`);
+  }
+
+  console.log(`📸 Post publicado no Instagram — cliente ${clienteId}`);
+  return creationId;
+}
+
+// ═══════════════════════════════════════
+// INSTAGRAM — ENDPOINTS
+// ═══════════════════════════════════════
+
+// OAuth callback — Meta redireciona aqui após o cliente autorizar
+app.get('/oauth/instagram/callback', async (req, res) => {
+  const { code, state: clienteId, error } = req.query;
+
+  if (error || !code || !clienteId) {
+    return res.send('<html><body style="font-family:sans-serif;text-align:center;padding:40px"><h2>❌ Autorização cancelada</h2><p>Pode fechar esta janela.</p></body></html>');
+  }
+
+  try {
+    // Trocar code por access_token de curta duração
+    const tokenRes = await axios.post(
+      'https://api.instagram.com/oauth/access_token',
+      new URLSearchParams({
+        client_id:     process.env.META_APP_ID,
+        client_secret: process.env.META_APP_SECRET,
+        grant_type:    'authorization_code',
+        redirect_uri:  process.env.META_REDIRECT_URI,
+        code,
+      }).toString(),
+      { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
+    );
+    const { access_token: shortToken, user_id } = tokenRes.data;
+
+    // Trocar por token de longa duração (válido por 60 dias)
+    const longRes = await axios.get('https://graph.instagram.com/access_token', {
+      params: {
+        grant_type:    'ig_exchange_token',
+        client_secret: process.env.META_APP_SECRET,
+        access_token:  shortToken,
+      },
+    });
+    const longToken = longRes.data.access_token;
+
+    // Salvar token e user_id no Supabase
+    await supabase.from('clientes').update({
+      instagram_access_token: longToken,
+      instagram_user_id:      String(user_id),
+    }).eq('id', clienteId);
+
+    // Buscar telefone do cliente e enviar confirmação via WhatsApp
+    const { data: cliente } = await supabase
+      .from('clientes')
+      .select('telefone, nome_contato, nome')
+      .eq('id', clienteId)
+      .maybeSingle();
+
+    if (cliente?.telefone) {
+      const nome = cliente.nome_contato || cliente.nome || '';
+      await enviarWhatsApp(
+        cliente.telefone,
+        `Instagram conectado com sucesso! ✅\n\nVou gerar conteúdo 3x por semana para você${nome ? `, ${nome}` : ''} 😊`
+      );
+    }
+
+    console.log(`✅ Instagram OAuth concluído — cliente ${clienteId}`);
+    res.send('<html><body style="font-family:sans-serif;text-align:center;padding:40px"><h2>✅ Instagram conectado!</h2><p>Pode fechar esta janela e voltar ao WhatsApp.</p></body></html>');
+  } catch (e) {
+    console.error('❌ Erro OAuth Instagram:', e.response?.data || e.message);
+    res.send('<html><body style="font-family:sans-serif;text-align:center;padding:40px"><h2>❌ Erro na autorização</h2><p>Tente novamente ou entre em contato com o suporte.</p></body></html>');
+  }
+});
+
+// Publicar post diretamente no Instagram do cliente
+app.post('/instagram/publicar', async (req, res) => {
+  const { cliente_id, imagem_url, legenda } = req.body;
+
+  if (!cliente_id || !imagem_url || !legenda) {
+    return res.status(400).json({ error: 'cliente_id, imagem_url e legenda são obrigatórios' });
+  }
+
+  try {
+    const creationId = await publicarPostInstagram(cliente_id, imagem_url, legenda, null);
+    return res.status(200).json({ ok: true, creation_id: creationId });
+  } catch (e) {
+    console.error('❌ Erro ao publicar Instagram:', e.response?.data || e.message);
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+// Webhook do n8n — envia post para aprovação do cliente antes de publicar
+app.post('/instagram/aprovar-post', async (req, res) => {
+  const { cliente_id, imagem_url, legenda, hashtags } = req.body;
+
+  if (!cliente_id || !imagem_url || !legenda) {
+    return res.status(400).json({ error: 'cliente_id, imagem_url e legenda são obrigatórios' });
+  }
+
+  try {
+    const { data: cliente } = await supabase
+      .from('clientes')
+      .select('telefone, nome_contato, nome')
+      .eq('id', cliente_id)
+      .maybeSingle();
+
+    if (!cliente?.telefone) {
+      return res.status(404).json({ error: 'Cliente não encontrado' });
+    }
+
+    const legendaCompleta = hashtags ? `${legenda}\n\n${hashtags}` : legenda;
+
+    // Salva post pendente no estado da conversa
+    await supabase.from('conversas_admin')
+      .update({
+        estado:        'aguardando_aprovacao_post_instagram',
+        acao_pendente: { imagem_url, legenda: legendaCompleta, cliente_id },
+      })
+      .eq('cliente_id', cliente_id);
+
+    // Envia prévia para aprovação
+    await enviarWhatsApp(
+      cliente.telefone,
+      `📸 Aqui está seu post de hoje!\n\n${legendaCompleta}\n\nPosso publicar agora? Responda *SIM* para confirmar`
+    );
+
+    console.log(`📸 Post enviado para aprovação — cliente ${cliente_id}`);
+    return res.status(200).json({ ok: true });
+  } catch (e) {
+    console.error('❌ Erro ao enviar post para aprovação:', e.message);
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+// ═══════════════════════════════════════
+// BOT WHATSAPP IA — HELPERS
+// ═══════════════════════════════════════
+
+/** Envia imagem (base64) via Z-API */
+async function enviarImagemWhatsApp(telefone, base64Img, legenda) {
+  try {
+    const imgData = base64Img.replace(/^data:image\/\w+;base64,/, '');
+    const url = `https://api.z-api.io/instances/${process.env.ZAPI_INSTANCE}/token/${process.env.ZAPI_TOKEN}/send-image`;
+    await axios.post(url, {
+      phone: telefone,
+      image: imgData,
+      caption: legenda || '',
+    }, { headers: { 'Client-Token': process.env.ZAPI_CLIENT_TOKEN } });
+  } catch (e) {
+    console.error('❌ Erro ao enviar imagem WhatsApp:', e.message);
+  }
+}
+
+/** Cria instância na Evolution API com webhook configurado */
+async function criarInstanciaEvolution(instanceName, webhookUrl) {
+  const baseUrl = process.env.EVOLUTION_API_URL;
+  const apiKey  = process.env.EVOLUTION_API_KEY;
+  await axios.post(`${baseUrl}/instance/create`, {
+    instanceName,
+    webhook: {
+      enabled: true,
+      url:     webhookUrl,
+      events:  ['MESSAGES_UPSERT'],
+    },
+  }, { headers: { apikey: apiKey, 'Content-Type': 'application/json' } });
+}
+
+/** Obtém QR Code da instância Evolution como base64 */
+async function obterQrCodeEvolution(instanceName) {
+  const baseUrl = process.env.EVOLUTION_API_URL;
+  const apiKey  = process.env.EVOLUTION_API_KEY;
+  const res = await axios.get(`${baseUrl}/instance/connect/${instanceName}`, {
+    headers: { apikey: apiKey },
+  });
+  return res.data?.base64 || res.data?.qrcode?.base64 || null;
+}
+
+/** Envia mensagem de texto via Evolution API */
+async function enviarMensagemEvolution(instanceName, phone, message) {
+  const baseUrl = process.env.EVOLUTION_API_URL;
+  const apiKey  = process.env.EVOLUTION_API_KEY;
+  await axios.post(`${baseUrl}/message/sendText/${instanceName}`, {
+    number: `${phone}@s.whatsapp.net`,
+    text:   message,
+  }, { headers: { apikey: apiKey, 'Content-Type': 'application/json' } });
+}
+
+/** Monta o system prompt do bot com os dados reais do negócio */
+function buildBotPrompt(cliente) {
+  return `Você é o assistente virtual de ${cliente.nome || 'nosso negócio'}, ${cliente.segmento || ''} em ${cliente.cidade || ''}.
+
+Responda como um atendente simpático e prestativo. Mensagens CURTAS (máximo 3-4 linhas por balão).
+
+INFORMAÇÕES DO NEGÓCIO:
+- Endereço: ${cliente.endereco || 'não informado'}
+- Horários: ${cliente.horarios || 'não informado'}
+- Serviços e preços: ${cliente.servicos || 'não informado'}
+${cliente.diferencial ? `- Diferencial: ${cliente.diferencial}` : ''}
+- WhatsApp de atendimento humano: ${cliente.whatsapp_negocio || 'não informado'}
+
+REGRAS:
+- NUNCA diga que é IA, robô ou assistente virtual
+- Se não souber a resposta, diga que vai verificar com a equipe
+- Para agendamentos, direcione ao WhatsApp ${cliente.whatsapp_negocio || ''}
+- Responda SOMENTE em português brasileiro`;
+}
+
+// ═══════════════════════════════════════
+// BOT WHATSAPP IA — ENDPOINTS
+// ═══════════════════════════════════════
+
+/**
+ * POST /bot-whatsapp/ativar
+ * Chamado pelo n8n após confirmação de pagamento do addon bot_whatsapp.
+ * Cria instância na Evolution, obtém QR Code e envia ao cliente.
+ */
+app.post('/bot-whatsapp/ativar', async (req, res) => {
+  const { cliente_id } = req.body;
+  if (!cliente_id) {
+    return res.status(400).json({ error: 'cliente_id é obrigatório' });
+  }
+
+  try {
+    const { data: cliente } = await supabase
+      .from('clientes')
+      .select('telefone, nome_contato, nome')
+      .eq('id', cliente_id)
+      .maybeSingle();
+
+    if (!cliente) {
+      return res.status(404).json({ error: 'Cliente não encontrado' });
+    }
+
+    // Nome da instância: bot_ + uuid sem hífens
+    const instanceName = `bot_${cliente_id.replace(/-/g, '')}`;
+    const serverUrl    = process.env.VITRINEIA_URL || '';
+    const webhookUrl   = `${serverUrl}/webhooks/bot/${cliente_id}`;
+
+    // Criar instância na Evolution API
+    await criarInstanciaEvolution(instanceName, webhookUrl);
+
+    // Salvar nome da instância no Supabase
+    await supabase.from('clientes')
+      .update({ bot_instance_name: instanceName })
+      .eq('id', cliente_id);
+
+    // Aguardar instância inicializar antes de pedir QR
+    await delay(3000);
+    const qrBase64 = await obterQrCodeEvolution(instanceName);
+
+    if (!qrBase64) {
+      return res.status(500).json({ error: 'QR Code não disponível ainda — tente novamente em instantes' });
+    }
+
+    // Enviar instruções + QR Code via Z-API
+    if (cliente.telefone) {
+      const nome = cliente.nome_contato || cliente.nome || '';
+      await enviarWhatsApp(
+        cliente.telefone,
+        `📱 Seu Bot WhatsApp está quase pronto${nome ? `, ${nome}` : ''}!\n\nPara ativar, siga os passos:\n1. Abra o WhatsApp no celular\n2. Vá em *Dispositivos conectados*\n3. Toque em "Conectar dispositivo"\n4. Escaneie o QR Code que vou mandar agora 👇`
+      );
+      await delay(1500);
+      await enviarImagemWhatsApp(cliente.telefone, qrBase64, 'Escaneie este QR Code para ativar seu bot! ✅');
+    }
+
+    console.log(`🤖 Bot criado: ${instanceName} — cliente ${cliente_id}`);
+    return res.status(200).json({ ok: true, instance_name: instanceName });
+  } catch (e) {
+    console.error('❌ Erro ao ativar bot WhatsApp:', e.response?.data || e.message);
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+/**
+ * POST /webhooks/bot-conectado/:clienteId
+ * Recebe eventos de conexão da Evolution — marca bot_ativo = true quando QR for escaneado.
+ */
+app.post('/webhooks/bot-conectado/:clienteId', async (req, res) => {
+  res.status(200).send('ok');
+  try {
+    const { clienteId } = req.params;
+    const evento = req.body?.event || req.body?.data?.event;
+    const estado = req.body?.data?.state || req.body?.state;
+
+    if (evento === 'connection.update' && estado === 'open') {
+      await supabase.from('clientes')
+        .update({ bot_ativo: true })
+        .eq('id', clienteId);
+
+      const { data: cliente } = await supabase
+        .from('clientes')
+        .select('telefone, nome_contato, nome')
+        .eq('id', clienteId)
+        .maybeSingle();
+
+      if (cliente?.telefone) {
+        const nome = cliente.nome_contato || cliente.nome || '';
+        await enviarWhatsApp(
+          cliente.telefone,
+          `✅ Bot WhatsApp ativado com sucesso${nome ? `, ${nome}` : ''}!\n\nAgora seus clientes já podem mandar mensagem e o bot responde automaticamente 😊`
+        );
+      }
+      console.log(`✅ Bot conectado — cliente ${clienteId}`);
+    }
+  } catch (err) {
+    console.error('❌ Erro no webhook de conexão do bot:', err.message);
+  }
+});
+
+/**
+ * POST /webhooks/bot/:clienteId
+ * Recebe mensagens dos clientes do estabelecimento via Evolution.
+ * Claude responde usando os dados do negócio como contexto.
+ */
+app.post('/webhooks/bot/:clienteId', async (req, res) => {
+  res.status(200).send('ok');
+  try {
+    const { clienteId } = req.params;
+    const payload = req.body;
+
+    // Ignorar mensagens próprias, grupos e payloads sem texto
+    if (payload?.data?.key?.fromMe === true) return;
+    if (payload?.data?.key?.remoteJid?.includes('@g.us')) return;
+    if (!payload?.data?.message?.conversation) return;
+
+    const phone = payload.data.key.remoteJid.replace('@s.whatsapp.net', '');
+    const text  = payload.data.message.conversation;
+
+    // Buscar dados completos do negócio no Supabase
+    const { data: cliente } = await supabase
+      .from('clientes')
+      .select('nome, segmento, cidade, endereco, servicos, horarios, diferencial, whatsapp_negocio, bot_instance_name, bot_ativo')
+      .eq('id', clienteId)
+      .maybeSingle();
+
+    if (!cliente?.bot_ativo || !cliente?.bot_instance_name) {
+      console.warn(`⚠️ Bot inativo ou sem instância para cliente ${clienteId}`);
+      return;
+    }
+
+    // Gerar resposta com Claude usando dados do negócio como contexto
+    const systemBot = buildBotPrompt(cliente);
+    const resposta  = await chamarClaude(systemBot, text, 500);
+
+    // Responder ao cliente via Evolution
+    await enviarMensagemEvolution(cliente.bot_instance_name, phone, resposta);
+    console.log(`🤖 Bot respondeu para ${phone} — cliente ${clienteId}`);
+  } catch (err) {
+    console.error('❌ Erro no webhook do bot:', err.message);
+  }
+});
+
+// ═══════════════════════════════════════
+// INTEGRAÇÃO PERMUTAÍ — RECEBER LEAD
+// ═══════════════════════════════════════
+
+/**
+ * POST /receber-lead
+ * Recebe leads indicados pela Permutaí com 50% de desconto no 1º mês.
+ * Cria o cliente no Supabase e inicia onboarding inteligente
+ * (pula perguntas de nome e cidade, já preenchidas).
+ */
+app.post('/receber-lead', async (req, res) => {
+  const { nome, telefone, cidade, especialidade, origem, desconto } = req.body;
+
+  if (!nome || !telefone || !cidade || !especialidade) {
+    return res.status(400).json({ error: 'nome, telefone, cidade e especialidade são obrigatórios' });
+  }
+
+  const telefoneLimpo  = telefone.replace(/\D/g, '');
+  const descontoPct    = Number(desconto) || 50;
+  const valorBase      = 47;
+  const valorDesconto  = (valorBase * (100 - descontoPct) / 100).toFixed(2);
+
+  try {
+    // Upsert na tabela clientes
+    const { data: clienteExistente } = await supabase
+      .from('clientes')
+      .select('id')
+      .eq('telefone', telefoneLimpo)
+      .maybeSingle();
+
+    let clienteId;
+
+    if (clienteExistente) {
+      clienteId = clienteExistente.id;
+      await supabase.from('clientes').update({
+        nome_contato:          nome,
+        cidade,
+        origem:                origem || 'permutai',
+        desconto_primeiro_mes: descontoPct,
+        status:                'indicado_permutai',
+        ativo:                 true,
+      }).eq('id', clienteId);
+    } else {
+      const { data: novo } = await supabase.from('clientes').insert({
+        telefone:              telefoneLimpo,
+        nome_contato:          nome,
+        cidade,
+        origem:                origem || 'permutai',
+        desconto_primeiro_mes: descontoPct,
+        status:                'indicado_permutai',
+        ativo:                 true,
+      }).select().maybeSingle();
+      clienteId = novo?.id;
+    }
+
+    if (!clienteId) throw new Error('Falha ao criar cliente no Supabase');
+
+    // Dados pré-preenchidos para o onboarding
+    const dadosIniciais = {
+      nome_negocio: nome,
+      categoria:    especialidade,
+      cidade,
+    };
+
+    // Upsert em conversas_admin com estado inicial Permutaí
+    const { data: conversaExistente } = await supabase
+      .from('conversas_admin')
+      .select('id')
+      .eq('telefone', telefoneLimpo)
+      .maybeSingle();
+
+    if (conversaExistente) {
+      await supabase.from('conversas_admin').update({
+        estado:        'permutai_aguardando_confirmacao',
+        acao_pendente: dadosIniciais,
+        historico:     [],
+      }).eq('telefone', telefoneLimpo);
+    } else {
+      await supabase.from('conversas_admin').insert({
+        telefone:      telefoneLimpo,
+        cliente_id:    clienteId,
+        estado:        'permutai_aguardando_confirmacao',
+        acao_pendente: dadosIniciais,
+        historico:     [],
+      });
+    }
+
+    // Enviar mensagem de boas-vindas personalizada
+    await enviarWhatsApp(
+      telefoneLimpo,
+      `Olá ${nome}! 👋\n\nSou a Yasmin da VitrineIA.\n\nVi que você é corretor embaixador da Permutaí — tenho uma oferta especial para você!\n\nPágina profissional + chatbot por apenas *R$${valorDesconto}* no primeiro mês (${descontoPct}% OFF).\n\nVocê atua em ${cidade} com ${especialidade}, certo?\n\nVamos criar sua página agora? 😊`
+    );
+
+    console.log(`✅ Lead Permutaí recebido: ${nome} (${telefoneLimpo}) — ${descontoPct}% OFF`);
+    return res.status(200).json({ ok: true, cliente_id: clienteId });
+  } catch (e) {
+    console.error('❌ Erro ao receber lead:', e.message);
+    return res.status(500).json({ error: e.message });
   }
 });
 
