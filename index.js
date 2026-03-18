@@ -1155,8 +1155,28 @@ app.post('/webhook/instagram', (req, res) => {
 app.get('/oauth/instagram/callback', async (req, res) => {
   const { code, state: clienteId, error } = req.query;
 
-  if (error || !code || !clienteId) {
-    return res.send('<html><body style="font-family:sans-serif;text-align:center;padding:40px"><h2>❌ Autorização cancelada</h2><p>Pode fechar esta janela.</p></body></html>');
+  // Log diagnóstico — aparece no Railway Deploy Logs
+  console.log('[OAuth] Callback recebido:', {
+    temCode: !!code,
+    temState: !!clienteId,
+    state: clienteId || 'VAZIO',
+    error: error || 'nenhum',
+    queryKeys: Object.keys(req.query)
+  });
+
+  if (error) {
+    console.error('[OAuth] Erro retornado pelo Instagram:', error);
+    return res.send('<html><body style="font-family:sans-serif;text-align:center;padding:40px"><h2>❌ Autorização cancelada</h2><p>Motivo: ' + error + '</p><p>Pode fechar esta janela.</p></body></html>');
+  }
+
+  if (!code) {
+    console.error('[OAuth] Code ausente na resposta');
+    return res.send('<html><body style="font-family:sans-serif;text-align:center;padding:40px"><h2>❌ Code ausente</h2><p>Pode fechar esta janela.</p></body></html>');
+  }
+
+  if (!clienteId) {
+    console.error('[OAuth] State/clienteId ausente — link OAuth gerado sem state?');
+    return res.send('<html><body style="font-family:sans-serif;text-align:center;padding:40px"><h2>❌ State ausente</h2><p>Pode fechar esta janela e tentar novamente.</p></body></html>');
   }
 
   try {
