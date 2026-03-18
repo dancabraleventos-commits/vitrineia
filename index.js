@@ -1183,7 +1183,7 @@ app.get('/oauth/instagram/callback', async (req, res) => {
   }
 
   try {
-    // Passo 1 — Trocar code por token curto (Instagram Business)
+    // Trocar code por access token (Instagram Business API)
     const tokenRes = await axios.post(
       'https://graph.instagram.com/oauth/access_token',
       new URLSearchParams({
@@ -1195,20 +1195,9 @@ app.get('/oauth/instagram/callback', async (req, res) => {
       }).toString(),
       { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
     );
-    const shortToken = tokenRes.data.access_token;
+    const longToken = tokenRes.data.access_token;
     const instagramUserId = tokenRes.data.user_id;
-    console.log('[OAuth] Token curto obtido, user_id:', instagramUserId);
-
-    // Passo 2 — Trocar por token de longa duração (60 dias)
-    const longRes = await axios.get('https://graph.instagram.com/access_token', {
-      params: {
-        grant_type:    'ig_exchange_token',
-        client_secret: process.env.META_APP_SECRET,
-        access_token:  shortToken,
-      },
-    });
-    const longToken = longRes.data.access_token;
-    console.log('[OAuth] Token longo obtido:', !!longToken);
+    console.log('[OAuth] Token obtido, user_id:', instagramUserId);
 
     // Salvar token e user_id no Supabase
     await supabase.from('clientes').update({
