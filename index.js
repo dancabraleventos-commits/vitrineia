@@ -1168,7 +1168,7 @@ app.get('/oauth/instagram/callback', async (req, res) => {
   try {
     // Trocar code por access_token de curta duração
     const tokenRes = await axios.post(
-      'https://api.instagram.com/oauth/access_token',
+      'https://graph.instagram.com/oauth/access_token',
       new URLSearchParams({
         client_id:     process.env.META_APP_ID,
         client_secret: process.env.META_APP_SECRET,
