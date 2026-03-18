@@ -1086,8 +1086,9 @@ Retorne APENAS o HTML completo modificado. Zero explicações.`,
 function buildInstagramOAuthLink(clienteId) {
   const appId = process.env.META_APP_ID;
   const redirectUri = encodeURIComponent(process.env.META_REDIRECT_URI || '');
-  const scope = 'instagram_basic,instagram_content_publish';
-  return `https://api.instagram.com/oauth/authorize?client_id=${appId}&redirect_uri=${redirectUri}&scope=${scope}&response_type=code&state=${clienteId}`;
+  // Instagram Business API — usa Facebook OAuth dialog, não api.instagram.com
+  const scope = encodeURIComponent('instagram_basic,instagram_content_publish,pages_show_list,instagram_manage_comments,instagram_manage_insights');
+  return `https://www.facebook.com/dialog/oauth?client_id=${appId}&redirect_uri=${redirectUri}&scope=${scope}&response_type=code&state=${clienteId}`;
 }
 
 async function publicarPostInstagram(clienteId, imagemUrl, legenda, telefoneCliente) {
