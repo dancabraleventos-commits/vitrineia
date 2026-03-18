@@ -72,7 +72,7 @@ async function enviarComDelay(telefone, mensagens) {
 
 async function chamarClaude(system, mensagem, maxTokens = 1000) {
   const res = await axios.post('https://api.anthropic.com/v1/messages', {
-    model: 'claude-sonnet-4-20250514',
+    model: 'claude-sonnet-4-6',
     max_tokens: maxTokens,
     system: [{
       type: 'text',
@@ -92,7 +92,7 @@ async function chamarClaude(system, mensagem, maxTokens = 1000) {
 
 async function chamarClaudeComHistorico(system, historico, maxTokens = 1000) {
   const res = await axios.post('https://api.anthropic.com/v1/messages', {
-    model: 'claude-sonnet-4-20250514',
+    model: 'claude-sonnet-4-6',
     max_tokens: maxTokens,
     system: [{
       type: 'text',
@@ -1034,7 +1034,13 @@ Retorne APENAS o HTML completo modificado. Zero explicações.`,
     // ═══════════════════════════════════════
     // APROVAÇÃO DE POST INSTAGRAM
     // ═══════════════════════════════════════
-
+ 
+// Meta Webhook Events — POST /webhook/instagram
+app.post('/webhook/instagram', (req, res) => {
+  res.status(200).send('EVENT_RECEIVED');
+  // Processar eventos futuramente se necessário
+  console.log('📨 Evento Meta recebido:', JSON.stringify(req.body).substring(0, 200));
+});
     if (estado === 'aguardando_aprovacao_post_instagram') {
       const msg = mensagem.toLowerCase().trim();
       const acaoPendente = conversa.acao_pendente;
@@ -1086,11 +1092,8 @@ Retorne APENAS o HTML completo modificado. Zero explicações.`,
 function buildInstagramOAuthLink(clienteId) {
   const appId = process.env.META_APP_ID;
   const redirectUri = encodeURIComponent(process.env.META_REDIRECT_URI || '');
-  // Endpoint correto para Instagram Business API (novo formato Meta)
-  const scope = 'instagram_business_basic,instagram_business_content_publish,instagram_business_manage_comments,instagram_business_manage_messages';
-  const link = `https://www.instagram.com/oauth/authorize?force_reauth=true&client_id=${appId}&redirect_uri=${redirectUri}&response_type=code&scope=${scope}&state=${clienteId}`;
-  console.log('[OAuth] Link gerado com state:', clienteId);
-  return link;
+  const scope = 'instagram_basic,instagram_content_publish';
+  return `https://www.instagram.com/oauth/authorize?client_id=${appId}&redirect_uri=${redirectUri}&scope=${scope}&response_type=code&state=${clienteId}`;
 }
 
 async function publicarPostInstagram(clienteId, imagemUrl, legenda, telefoneCliente) {
@@ -1158,32 +1161,12 @@ app.post('/webhook/instagram', (req, res) => {
 app.get('/oauth/instagram/callback', async (req, res) => {
   const { code, state: clienteId, error } = req.query;
 
-  // Log diagnóstico — aparece no Railway Deploy Logs
-  console.log('[OAuth] Callback recebido:', {
-    temCode: !!code,
-    temState: !!clienteId,
-    state: clienteId || 'VAZIO',
-    error: error || 'nenhum',
-    queryKeys: Object.keys(req.query)
-  });
-
-  if (error) {
-    console.error('[OAuth] Erro retornado pelo Instagram:', error);
-    return res.send('<html><body style="font-family:sans-serif;text-align:center;padding:40px"><h2>❌ Autorização cancelada</h2><p>Motivo: ' + error + '</p><p>Pode fechar esta janela.</p></body></html>');
-  }
-
-  if (!code) {
-    console.error('[OAuth] Code ausente na resposta');
-    return res.send('<html><body style="font-family:sans-serif;text-align:center;padding:40px"><h2>❌ Code ausente</h2><p>Pode fechar esta janela.</p></body></html>');
-  }
-
-  if (!clienteId) {
-    console.error('[OAuth] State/clienteId ausente — link OAuth gerado sem state?');
-    return res.send('<html><body style="font-family:sans-serif;text-align:center;padding:40px"><h2>❌ State ausente</h2><p>Pode fechar esta janela e tentar novamente.</p></body></html>');
+  if (error || !code || !clienteId) {
+    return res.send('<html><body style="font-family:sans-serif;text-align:center;padding:40px"><h2>❌ Autorização cancelada</h2><p>Pode fechar esta janela.</p></body></html>');
   }
 
   try {
-    // Trocar code por access token (Instagram Business API)
+    // Trocar code por access_token (Instagram Business — graph.instagram.com)
     const tokenRes = await axios.post(
       'https://graph.instagram.com/oauth/access_token',
       new URLSearchParams({
@@ -1195,14 +1178,17 @@ app.get('/oauth/instagram/callback', async (req, res) => {
       }).toString(),
       { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
     );
-    const longToken = tokenRes.data.access_token;
-    const instagramUserId = tokenRes.data.user_id;
-    console.log('[OAuth] Token obtido, user_id:', instagramUserId);
+    // Token Business Instagram já é válido diretamente — sem necessidade de exchange
+    const { access_token: token, user_id } = tokenRes.data;
+
+    if (!token || !user_id) {
+      throw new Error(`Token ou user_id ausente na resposta: ${JSON.stringify(tokenRes.data)}`);
+    }
 
     // Salvar token e user_id no Supabase
     await supabase.from('clientes').update({
-      instagram_access_token: longToken,
-      instagram_user_id:      String(instagramUserId),
+      instagram_access_token: token,
+      instagram_user_id:      String(user_id),
     }).eq('id', clienteId);
 
     // Buscar telefone do cliente e enviar confirmação via WhatsApp
@@ -1612,66 +1598,6 @@ app.post('/receber-lead', async (req, res) => {
 // ═══════════════════════════════════════
 
 app.get('/', (req, res) => res.send('VitrineIA Admin — Yasmin ✅'));
-
-// ═══════════════════════════════════════
-// INSTAGRAM — RENOVAÇÃO DE TOKENS
-// Chamar 1x por semana via n8n ou cron
-// POST /instagram/renovar-tokens
-// ═══════════════════════════════════════
-
-app.post('/instagram/renovar-tokens', async (req, res) => {
-  try {
-    const { data: clientes } = await supabase
-      .from('clientes')
-      .select('id, instagram_access_token, instagram_user_id, telefone, nome_contato, nome')
-      .not('instagram_access_token', 'is', null)
-      .not('instagram_user_id', 'is', null);
-
-    if (!clientes?.length) return res.json({ renovados: 0, total: 0 });
-
-    let renovados = 0;
-    const erros = [];
-
-    for (const cliente of clientes) {
-      try {
-        const renovRes = await axios.get('https://graph.instagram.com/refresh_access_token', {
-          params: {
-            grant_type: 'ig_refresh_token',
-            access_token: cliente.instagram_access_token,
-          },
-        });
-
-        const novoToken = renovRes.data.access_token;
-        if (!novoToken) continue;
-
-        await supabase.from('clientes')
-          .update({ instagram_access_token: novoToken })
-          .eq('id', cliente.id);
-
-        renovados++;
-        console.log(`✅ Token Instagram renovado — cliente ${cliente.id}`);
-      } catch (e) {
-        // Token expirado — envia link de reconexão
-        console.warn(`⚠️ Token expirado — cliente ${cliente.id}`);
-        erros.push(cliente.id);
-
-        if (cliente.telefone) {
-          const oauthLink = buildInstagramOAuthLink(cliente.id);
-          const nome = cliente.nome_contato || cliente.nome || '';
-          await enviarWhatsApp(
-            cliente.telefone,
-            `Oi${nome ? ` ${nome}` : ''}! 😊 Preciso que você reconecte seu Instagram para continuar publicando automaticamente.\n\n👉 ${oauthLink}\n\nÉ rápido — só clicar e aprovar!`
-          );
-        }
-      }
-    }
-
-    return res.json({ renovados, erros: erros.length, total: clientes.length });
-  } catch (e) {
-    console.error('❌ Erro ao renovar tokens:', e.message);
-    return res.status(500).json({ error: e.message });
-  }
-});
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`🚀 Yasmin rodando na porta ${PORT}`));
