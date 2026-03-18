@@ -1183,41 +1183,31 @@ app.get('/oauth/instagram/callback', async (req, res) => {
   }
 
   try {
-    // Passo 1 — Trocar code por token de curta duração (Instagram Business API)
+    // Passo 1 — Trocar code por token de curta duração
+    // instagram.com/oauth/authorize → token via api.instagram.com
     const tokenRes = await axios.post(
-      'https://graph.facebook.com/v19.0/oauth/access_token',
-      null,
-      {
-        params: {
-          client_id:     process.env.META_APP_ID,
-          client_secret: process.env.META_APP_SECRET,
-          grant_type:    'authorization_code',
-          redirect_uri:  process.env.META_REDIRECT_URI,
-          code,
-        },
-      }
+      'https://api.instagram.com/oauth/access_token',
+      new URLSearchParams({
+        client_id:     process.env.META_APP_ID,
+        client_secret: process.env.META_APP_SECRET,
+        grant_type:    'authorization_code',
+        redirect_uri:  process.env.META_REDIRECT_URI,
+        code,
+      }).toString(),
+      { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
     );
     const shortToken = tokenRes.data.access_token;
+    const instagramUserId = tokenRes.data.user_id;
 
     // Passo 2 — Trocar por token de longa duração (válido por 60 dias)
-    const longRes = await axios.get('https://graph.facebook.com/v19.0/oauth/access_token', {
+    const longRes = await axios.get('https://graph.instagram.com/access_token', {
       params: {
-        grant_type:        'fb_exchange_token',
-        client_id:         process.env.META_APP_ID,
+        grant_type:        'ig_exchange_token',
         client_secret:     process.env.META_APP_SECRET,
-        fb_exchange_token: shortToken,
+        access_token:      shortToken,
       },
     });
     const longToken = longRes.data.access_token;
-
-    // Passo 3 — Buscar Instagram Business Account ID
-    const meRes = await axios.get('https://graph.facebook.com/v19.0/me', {
-      params: {
-        fields:       'id,instagram_business_account',
-        access_token: longToken,
-      },
-    });
-    const instagramUserId = meRes.data?.instagram_business_account?.id || meRes.data?.id;
 
     // Salvar token e user_id no Supabase
     await supabase.from('clientes').update({
