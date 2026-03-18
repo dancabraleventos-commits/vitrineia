@@ -1181,13 +1181,14 @@ app.get('/oauth/instagram/callback', async (req, res) => {
     const { access_token: shortToken, user_id } = tokenRes.data;
 
     // Trocar por token de longa duração (válido por 60 dias)
-    const longRes = await axios.get('https://graph.instagram.com/access_token', {
-      params: {
-        grant_type:    'ig_exchange_token',
-        client_secret: process.env.META_APP_SECRET,
-        access_token:  shortToken,
-      },
-    });
+   const longRes = await axios.get('https://graph.facebook.com/oauth/access_token', {
+  params: {
+    grant_type:    'fb_exchange_token',
+    client_id:     process.env.META_APP_ID,
+    client_secret: process.env.META_APP_SECRET,
+    fb_exchange_token: shortToken,
+  },
+});
     const longToken = longRes.data.access_token;
 
     // Salvar token e user_id no Supabase
