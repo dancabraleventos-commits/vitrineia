@@ -1092,8 +1092,8 @@ app.post('/webhook/instagram', (req, res) => {
 function buildInstagramOAuthLink(clienteId) {
   const appId = process.env.META_APP_ID;
   const redirectUri = encodeURIComponent(process.env.META_REDIRECT_URI || '');
-  const scope = 'instagram_basic,instagram_content_publish';
-  return `https://www.instagram.com/oauth/authorize?client_id=${appId}&redirect_uri=${redirectUri}&scope=${scope}&response_type=code&state=${clienteId}`;
+  const scope = 'instagram_business_basic,instagram_business_content_publish,instagram_business_manage_comments,instagram_business_manage_messages';
+  return `https://www.instagram.com/oauth/authorize?force_reauth=true&client_id=${appId}&redirect_uri=${redirectUri}&response_type=code&scope=${scope}&state=${clienteId}`;
 }
 
 async function publicarPostInstagram(clienteId, imagemUrl, legenda, telefoneCliente) {
@@ -1109,9 +1109,9 @@ async function publicarPostInstagram(clienteId, imagemUrl, legenda, telefoneClie
 
   const { instagram_access_token: token, instagram_user_id: userId } = cliente;
 
-  // Passo 1 — Criar container de mídia
+  // Passo 1 — Criar container de mídia (nova Instagram Business API)
   const containerRes = await axios.post(
-    `https://graph.instagram.com/v18.0/${userId}/media`,
+    `https://graph.facebook.com/v21.0/${userId}/media`,
     null,
     { params: { image_url: imagemUrl, caption: legenda, access_token: token } }
   );
@@ -1119,7 +1119,7 @@ async function publicarPostInstagram(clienteId, imagemUrl, legenda, telefoneClie
 
   // Passo 2 — Publicar container
   await axios.post(
-    `https://graph.instagram.com/v18.0/${userId}/media_publish`,
+    `https://graph.facebook.com/v21.0/${userId}/media_publish`,
     null,
     { params: { creation_id: creationId, access_token: token } }
   );
@@ -1166,9 +1166,9 @@ app.get('/oauth/instagram/callback', async (req, res) => {
   }
 
   try {
-    // Trocar code por access_token (Instagram Business — graph.instagram.com)
+    // Nova Instagram Business API — troca code por token via graph.facebook.com
     const tokenRes = await axios.post(
-      'https://graph.instagram.com/oauth/access_token',
+      'https://graph.facebook.com/v21.0/oauth/access_token',
       new URLSearchParams({
         client_id:     process.env.META_APP_ID,
         client_secret: process.env.META_APP_SECRET,
@@ -1178,17 +1178,35 @@ app.get('/oauth/instagram/callback', async (req, res) => {
       }).toString(),
       { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
     );
-    // Token Business Instagram já é válido diretamente — sem necessidade de exchange
-    const { access_token: token, user_id } = tokenRes.data;
 
-    if (!token || !user_id) {
-      throw new Error(`Token ou user_id ausente na resposta: ${JSON.stringify(tokenRes.data)}`);
+    console.log('🔑 Token response:', JSON.stringify(tokenRes.data));
+
+    const { access_token: token } = tokenRes.data;
+
+    if (!token) {
+      throw new Error(`Token ausente na resposta: ${JSON.stringify(tokenRes.data)}`);
+    }
+
+    // Buscar o Instagram Business Account ID vinculado ao token
+    const meRes = await axios.get('https://graph.facebook.com/v21.0/me', {
+      params: {
+        fields: 'id,name,instagram_business_account',
+        access_token: token,
+      }
+    });
+
+    console.log('👤 Me response:', JSON.stringify(meRes.data));
+
+    const instagramUserId = meRes.data?.instagram_business_account?.id || meRes.data?.id;
+
+    if (!instagramUserId) {
+      throw new Error(`Instagram user ID não encontrado: ${JSON.stringify(meRes.data)}`);
     }
 
     // Salvar token e user_id no Supabase
     await supabase.from('clientes').update({
       instagram_access_token: token,
-      instagram_user_id:      String(user_id),
+      instagram_user_id:      String(instagramUserId),
     }).eq('id', clienteId);
 
     // Buscar telefone do cliente e enviar confirmação via WhatsApp
