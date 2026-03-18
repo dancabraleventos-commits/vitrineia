@@ -1034,20 +1034,6 @@ Retorne APENAS o HTML completo modificado. Zero explicações.`,
     // ═══════════════════════════════════════
     // APROVAÇÃO DE POST INSTAGRAM
     // ═══════════════════════════════════════
-// Meta Webhook Verification — GET /webhook/instagram
-app.get('/webhook/instagram', (req, res) => {
-  const mode      = req.query['hub.mode'];
-  const token     = req.query['hub.verify_token'];
-  const challenge = req.query['hub.challenge'];
- 
-  if (mode === 'subscribe' && token === process.env.META_VERIFY_TOKEN) {
-    console.log('✅ Meta webhook verificado');
-    return res.status(200).send(challenge);
-  }
- 
-  console.warn('❌ Meta webhook verification falhou');
-  return res.status(403).send('Forbidden');
-});
  
 // Meta Webhook Events — POST /webhook/instagram
 app.post('/webhook/instagram', (req, res) => {
@@ -1148,7 +1134,25 @@ async function publicarPostInstagram(clienteId, imagemUrl, legenda, telefoneClie
   console.log(`📸 Post publicado no Instagram — cliente ${clienteId}`);
   return creationId;
 }
+// Meta Webhook Verification
+app.get('/webhook/instagram', (req, res) => {
+  const mode      = req.query['hub.mode'];
+  const token     = req.query['hub.verify_token'];
+  const challenge = req.query['hub.challenge'];
 
+  if (mode === 'subscribe' && token === process.env.META_VERIFY_TOKEN) {
+    console.log('✅ Meta webhook verificado');
+    return res.status(200).send(challenge);
+  }
+
+  console.warn('❌ Meta webhook verification falhou');
+  return res.status(403).send('Forbidden');
+});
+
+app.post('/webhook/instagram', (req, res) => {
+  res.status(200).send('EVENT_RECEIVED');
+  console.log('📨 Evento Meta:', JSON.stringify(req.body).substring(0, 200));
+});
 // ═══════════════════════════════════════
 // INSTAGRAM — ENDPOINTS
 // ═══════════════════════════════════════
