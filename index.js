@@ -1160,35 +1160,46 @@ app.get('/oauth/instagram/callback', async (req, res) => {
   }
 
   try {
-    // Trocar code por access_token de curta duração
+    // Passo 1 — Trocar code por token de curta duração (Instagram Business API)
     const tokenRes = await axios.post(
-      'https://graph.instagram.com/oauth/access_token',
-      new URLSearchParams({
-        client_id:     process.env.META_APP_ID,
-        client_secret: process.env.META_APP_SECRET,
-        grant_type:    'authorization_code',
-        redirect_uri:  process.env.META_REDIRECT_URI,
-        code,
-      }).toString(),
-      { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
+      'https://graph.facebook.com/v19.0/oauth/access_token',
+      null,
+      {
+        params: {
+          client_id:     process.env.META_APP_ID,
+          client_secret: process.env.META_APP_SECRET,
+          grant_type:    'authorization_code',
+          redirect_uri:  process.env.META_REDIRECT_URI,
+          code,
+        },
+      }
     );
-    const { access_token: shortToken, user_id } = tokenRes.data;
+    const shortToken = tokenRes.data.access_token;
 
-    // Trocar por token de longa duração (válido por 60 dias)
-   const longRes = await axios.get('https://graph.facebook.com/oauth/access_token', {
-  params: {
-    grant_type:    'fb_exchange_token',
-    client_id:     process.env.META_APP_ID,
-    client_secret: process.env.META_APP_SECRET,
-    fb_exchange_token: shortToken,
-  },
-});
+    // Passo 2 — Trocar por token de longa duração (válido por 60 dias)
+    const longRes = await axios.get('https://graph.facebook.com/v19.0/oauth/access_token', {
+      params: {
+        grant_type:        'fb_exchange_token',
+        client_id:         process.env.META_APP_ID,
+        client_secret:     process.env.META_APP_SECRET,
+        fb_exchange_token: shortToken,
+      },
+    });
     const longToken = longRes.data.access_token;
+
+    // Passo 3 — Buscar Instagram Business Account ID
+    const meRes = await axios.get('https://graph.facebook.com/v19.0/me', {
+      params: {
+        fields:       'id,instagram_business_account',
+        access_token: longToken,
+      },
+    });
+    const instagramUserId = meRes.data?.instagram_business_account?.id || meRes.data?.id;
 
     // Salvar token e user_id no Supabase
     await supabase.from('clientes').update({
       instagram_access_token: longToken,
-      instagram_user_id:      String(user_id),
+      instagram_user_id:      String(instagramUserId),
     }).eq('id', clienteId);
 
     // Buscar telefone do cliente e enviar confirmação via WhatsApp
