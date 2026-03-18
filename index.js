@@ -1183,41 +1183,32 @@ app.get('/oauth/instagram/callback', async (req, res) => {
   }
 
   try {
-    // Passo 1 — Trocar code por token (Instagram Business via Graph API)
+    // Passo 1 — Trocar code por token curto (Instagram Business)
     const tokenRes = await axios.post(
-      'https://graph.facebook.com/v19.0/oauth/access_token',
-      null,
-      {
-        params: {
-          client_id:     process.env.META_APP_ID,
-          client_secret: process.env.META_APP_SECRET,
-          grant_type:    'authorization_code',
-          redirect_uri:  process.env.META_REDIRECT_URI,
-          code,
-        },
-      }
+      'https://graph.instagram.com/oauth/access_token',
+      new URLSearchParams({
+        client_id:     process.env.META_APP_ID,
+        client_secret: process.env.META_APP_SECRET,
+        grant_type:    'authorization_code',
+        redirect_uri:  process.env.META_REDIRECT_URI,
+        code,
+      }).toString(),
+      { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
     );
     const shortToken = tokenRes.data.access_token;
-    console.log('[OAuth] Token curto obtido:', !!shortToken);
+    const instagramUserId = tokenRes.data.user_id;
+    console.log('[OAuth] Token curto obtido, user_id:', instagramUserId);
 
-    // Passo 2 — Trocar por token de longa duração (válido por 60 dias)
-    const longRes = await axios.get('https://graph.facebook.com/v19.0/oauth/access_token', {
+    // Passo 2 — Trocar por token de longa duração (60 dias)
+    const longRes = await axios.get('https://graph.instagram.com/access_token', {
       params: {
-        grant_type:        'fb_exchange_token',
-        client_id:         process.env.META_APP_ID,
-        client_secret:     process.env.META_APP_SECRET,
-        fb_exchange_token: shortToken,
+        grant_type:    'ig_exchange_token',
+        client_secret: process.env.META_APP_SECRET,
+        access_token:  shortToken,
       },
     });
     const longToken = longRes.data.access_token;
     console.log('[OAuth] Token longo obtido:', !!longToken);
-
-    // Passo 3 — Buscar Instagram User ID vinculado
-    const meRes = await axios.get('https://graph.facebook.com/v19.0/me', {
-      params: { fields: 'id,name', access_token: longToken },
-    });
-    const instagramUserId = meRes.data?.id;
-    console.log('[OAuth] User ID:', instagramUserId);
 
     // Salvar token e user_id no Supabase
     await supabase.from('clientes').update({
