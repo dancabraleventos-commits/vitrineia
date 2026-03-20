@@ -2,20 +2,6 @@ const express = require('express');
 const axios = require('axios');
 const { createClient } = require('@supabase/supabase-js');
 
-// ═══════════════════════════════════════
-// VALIDAÇÃO DE ENV VARS — falha rápido e claro
-// ═══════════════════════════════════════
-const requiredEnvVars = [
-  'SUPABASE_URL', 'SUPABASE_KEY',
-  'ANTHROPIC_KEY',
-  'ZAPI_INSTANCE', 'ZAPI_TOKEN', 'ZAPI_CLIENT_TOKEN',
-  'META_APP_ID', 'META_APP_SECRET', 'META_REDIRECT_URI', 'META_VERIFY_TOKEN',
-  'VERCEL_TOKEN'
-];
-requiredEnvVars.forEach(v => {
-  if (!process.env[v]) console.warn(`⚠️ [ENV] Variável não definida: ${v}`);
-});
-
 const app = express();
 app.use(express.json());
 
@@ -52,9 +38,8 @@ ADD-ONS DISPONÍVEIS:
 🌐 Domínio próprio — R$9,90/mês
 📅 Agendamento Online Avançado — R$29/mês
 ⭐ Avaliações Google Automáticas — R$19/mês
-📸 Instagram Posts (12/mês) — R$39/mês
-💬 Instagram DM Automático — R$19/mês
-📱 Instagram Completo (Posts + DM) — R$49/mês
+📸 Conteúdo Instagram (12 legendas/mês) — R$19,90/mês
+  → VitrineIA gera as legendas e hashtags, cliente posta no próprio perfil
 
 Responda SEMPRE como a Yasmin. Mensagens curtas e naturais.`;
 
@@ -86,7 +71,7 @@ async function enviarComDelay(telefone, mensagens) {
 
 async function chamarClaude(system, mensagem, maxTokens = 1000) {
   const res = await axios.post('https://api.anthropic.com/v1/messages', {
-    model: 'claude-sonnet-4-6',
+    model: 'claude-sonnet-4-20250514',
     max_tokens: maxTokens,
     system: [{
       type: 'text',
@@ -106,7 +91,7 @@ async function chamarClaude(system, mensagem, maxTokens = 1000) {
 
 async function chamarClaudeComHistorico(system, historico, maxTokens = 1000) {
   const res = await axios.post('https://api.anthropic.com/v1/messages', {
-    model: 'claude-sonnet-4-6',
+    model: 'claude-sonnet-4-20250514',
     max_tokens: maxTokens,
     system: [{
       type: 'text',
@@ -509,9 +494,7 @@ Zero explicações, só JSON.`,
 Add-ons disponíveis:
 - agendamento (R$29/mês)
 - avaliacoes (R$19/mês)
-- instagram_posts (R$39/mês)
-- instagram_dm (R$19/mês)
-- instagram_completo (R$49/mês)
+- instagram_conteudo (R$19,90/mês)
 
 Retorne SOMENTE JSON:
 {"addons_escolhidos":["agendamento","avaliacoes"],"quer_mais":true,"nenhum":false}
@@ -538,8 +521,7 @@ Zero explicações, só JSON.`,
 
         // Calcular valor total
         const precos = {
-          agendamento: 29, avaliacoes: 19,
-          instagram_posts: 39, instagram_dm: 19, instagram_completo: 49
+          agendamento: 29, avaliacoes: 19, instagram_conteudo: 19.90
         };
         const valorAddons = dados.addons.reduce((sum, a) => sum + (precos[a] || 0), 0);
         const valorDominio = dados.addon_dominio ? 9.90 : 0;
@@ -552,9 +534,7 @@ Zero explicações, só JSON.`,
         const addonsNomes = {
           agendamento: '📅 Agendamento Online',
           avaliacoes: '⭐ Avaliações Google',
-          instagram_posts: '📸 Instagram Posts',
-          instagram_dm: '💬 Instagram DM',
-          instagram_completo: '📱 Instagram Completo'
+          instagram_conteudo: '📸 Conteúdo Instagram'
         };
 
         const listaAddons = dados.addons.map(a => addonsNomes[a] || a).join('\n');
@@ -568,10 +548,10 @@ Zero explicações, só JSON.`,
           `Valor total: *R$${valorTotal.toFixed(2)}/mês*${linhaDesconto} 😊`,
         ]);
         await delay(1000);
-        // Se tem Instagram, coletar @ antes de gerar a página
+        // Se tem Instagram, coletar @ (só para personalização — sem OAuth)
         const temInstagram = dados.addons.some(a => a.includes('instagram'));
         if (temInstagram) {
-          await enviarWhatsApp(telefone, `Você tem Instagram do negócio? Me manda o @ para ativar a publicação automática 😊`);
+          await enviarWhatsApp(telefone, `Você tem Instagram do negócio? Me manda o @ pra eu personalizar seu conteúdo 😊`);
           await setEstado(telefone, 'coletando_instagram');
         } else {
           await iniciarGeracaoPagina(telefone, dados, cliente);
@@ -616,11 +596,10 @@ Zero explicações, só JSON.`,
       await setDadosOnboarding(telefone, dados);
       await supabase.from('clientes').update({ instagram_handle: handle }).eq('id', cliente.id);
 
-      const oauthLink = buildInstagramOAuthLink(cliente.id);
       await enviarComDelay(telefone, [
         `Perfeito! Anotei o @${handle} 😊`,
-        `Para ativar a publicação automática, preciso que você autorize o acesso:\n\n${oauthLink}\n\nÉ só clicar e aprovar — bem rápido!`,
-        `Enquanto isso, já vou montar sua página! 😊`,
+        `Todo mês você recebe 12 legendas prontas aqui no WhatsApp — é só copiar e postar!`,
+        `Agora vou montar sua página! 😊`,
       ]);
       await iniciarGeracaoPagina(telefone, dados, cliente);
       return true;
@@ -655,7 +634,7 @@ async function oferecerAddons(telefone, dados) {
 
   await enviarWhatsApp(telefone, msgAddons);
   await delay(2000);
-  await enviarWhatsApp(telefone, `Também temos gestão de Instagram automática:\n\n📸 *Instagram Posts* — R$39/mês (12 posts/mês)\n💬 *Instagram DM* — R$19/mês (respostas automáticas)\n📱 *Instagram Completo* — R$49/mês (Posts + DM com desconto)\n\nAlgum te interessou? 😊`);
+  await enviarWhatsApp(telefone, `Também temos Conteúdo para Instagram:\n\n📸 *Conteúdo Instagram* — R$19,90/mês\n12 legendas prontas por mês com hashtags — você só posta!\n\nTe interessa? 😊`);
   await setEstado(telefone, 'oferecendo_addons');
 }
 
@@ -801,6 +780,11 @@ async function handleSuporte(telefone, mensagem, cliente) {
   const historico = await getHistorico(telefone);
 
   // Montar contexto completo pra Yasmin
+  // Buscar URL da página no Supabase antes de responder
+  const paginaCliente = await getHtmlAtual(cliente.id);
+  const urlPagina = paginaCliente?.url_publica || null;
+  console.log('[Suporte] URL página cliente:', urlPagina || 'não encontrada');
+
   const systemSuporte = `${YASMIN_SYSTEM}
 
 DADOS DO CLIENTE:
@@ -809,13 +793,15 @@ Negócio: ${nomeNegocio}
 Categoria: ${categoria}
 Cidade: ${cidade}
 Add-ons ativos: ${JSON.stringify(cliente.addons || [])}
+URL da página no ar: ${urlPagina || 'ainda não gerada'}
 
 INSTRUÇÕES:
-1. Se o cliente quer EDITAR a página (mudar preço, horário, serviço, texto, etc) → responda EXATAMENTE com JSON: {"acao":"editar","instrucao":"o que editar"}
-2. Se o cliente quer CANCELAR → seja gentil, tente entender o motivo, mas NUNCA dificulte. Se insistir: {"acao":"cancelar"}
-3. Se o cliente pergunta sobre ADD-ON que não tem → apresente naturalmente com preço
-4. Se é DÚVIDA ou CONVERSA → responda como Yasmin, curta e simpática
-5. Para qualquer resposta conversacional, responda diretamente como Yasmin (sem JSON)
+1. Se o cliente quer VER ou ACESSAR a página → responda EXATAMENTE com JSON: {"acao":"ver_pagina"}
+2. Se o cliente quer EDITAR a página (mudar preço, horário, serviço, texto, etc) → responda EXATAMENTE com JSON: {"acao":"editar","instrucao":"o que editar"}
+3. Se o cliente quer CANCELAR → seja gentil, tente entender o motivo, mas NUNCA dificulte. Se insistir: {"acao":"cancelar"}
+4. Se o cliente pergunta sobre ADD-ON que não tem → apresente naturalmente com preço
+5. Se é DÚVIDA ou CONVERSA → responda como Yasmin, curta e simpática
+6. Para qualquer resposta conversacional, responda diretamente como Yasmin (sem JSON)
 
 IMPORTANTE: Mensagens CURTAS (máximo 3-4 linhas). Nunca mande textão.`;
 
@@ -859,6 +845,16 @@ Retorne APENAS o HTML completo modificado. Zero explicações.`,
         `Pronto! Gerei a nova versão 😊`,
         `Página atual: ${paginaAtual.url_publica}\n\nResponda:\n✅ *publicar* — colocar no ar\n✏️ *ajusta [o que mudar]* — mais ajustes\n❌ *cancelar* — descartar`
       ]);
+      return;
+    }
+
+    if (parsed.acao === 'ver_pagina') {
+      if (urlPagina) {
+        await enviarWhatsApp(telefone, `Aqui está sua página, ${nomeContato}! 😊\n\n👉 ${urlPagina}\n\nQuer mudar alguma coisa é só me falar!`);
+      } else {
+        await enviarWhatsApp(telefone, `Ainda não encontrei sua página cadastrada, ${nomeContato} 🤔 Vou verificar com a equipe e te aviso em breve!`);
+      }
+      await salvarHistorico(telefone, 'assistant', urlPagina ? `Enviei o link da página: ${urlPagina}` : 'Página não encontrada, verificando.');
       return;
     }
 
@@ -1048,13 +1044,7 @@ Retorne APENAS o HTML completo modificado. Zero explicações.`,
     // ═══════════════════════════════════════
     // APROVAÇÃO DE POST INSTAGRAM
     // ═══════════════════════════════════════
- 
-// Meta Webhook Events — POST /webhook/instagram
-app.post('/webhook/instagram', (req, res) => {
-  res.status(200).send('EVENT_RECEIVED');
-  // Processar eventos futuramente se necessário
-  console.log('📨 Evento Meta recebido:', JSON.stringify(req.body).substring(0, 200));
-});
+
     if (estado === 'aguardando_aprovacao_post_instagram') {
       const msg = mensagem.toLowerCase().trim();
       const acaoPendente = conversa.acao_pendente;
@@ -1100,228 +1090,93 @@ app.post('/webhook/instagram', (req, res) => {
 });
 
 // ═══════════════════════════════════════
-// INSTAGRAM — HELPERS
+// INSTAGRAM — GERAÇÃO DE CONTEÚDO (novo modelo R$19,90)
+// Gera legendas e hashtags — cliente posta manualmente
 // ═══════════════════════════════════════
 
-function buildInstagramOAuthLink(clienteId) {
-  const appId = process.env.META_APP_ID;
-  const redirectUri = encodeURIComponent(process.env.META_REDIRECT_URI || '');
-  const scope = 'instagram_business_basic,instagram_business_content_publish,instagram_business_manage_comments,instagram_business_manage_messages';
-  return `https://www.instagram.com/oauth/authorize?force_reauth=true&client_id=${appId}&redirect_uri=${redirectUri}&response_type=code&scope=${scope}&state=${clienteId}`;
+// Prompt para geração de conteúdo Instagram
+function buildPromptInstagram(cliente, mes) {
+  const meses = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+  const nomeMes = meses[(mes || new Date().getMonth())];
+  return `Você é especialista em marketing digital para pequenas empresas brasileiras.
+
+Crie 12 legendas para Instagram para o seguinte negócio:
+
+Negócio: ${cliente.nome || 'Negócio'}
+Segmento: ${cliente.segmento || ''}
+Cidade: ${cliente.cidade || ''}
+Serviços: ${cliente.servicos || ''}
+Diferencial: ${cliente.diferencial || ''}
+Mês: ${nomeMes}
+
+REGRAS:
+- Cada legenda deve ter entre 3-5 linhas
+- Tom: próximo, humano, sem forçar vendas
+- Variar os temas: promoção, bastidores, dica, depoimento, serviço, data comemorativa
+- Incluir chamada para ação natural em cada post
+- 5 a 8 hashtags relevantes ao segmento e cidade no final de cada legenda
+- Numerar de 1 a 12
+
+Retorne APENAS as 12 legendas numeradas, sem explicações.`;
 }
 
-async function publicarPostInstagram(clienteId, imagemUrl, legenda, telefoneCliente) {
-  const { data: cliente } = await supabase
-    .from('clientes')
-    .select('instagram_access_token, instagram_user_id, telefone, nome_contato, nome')
-    .eq('id', clienteId)
-    .maybeSingle();
+// POST /instagram/gerar-conteudo
+// Gera 12 legendas e envia via WhatsApp para o cliente postar
+app.post('/instagram/gerar-conteudo', async (req, res) => {
+  const { cliente_id, mes } = req.body;
 
-  if (!cliente?.instagram_access_token || !cliente?.instagram_user_id) {
-    throw new Error('Cliente sem Instagram conectado');
-  }
-
-  const { instagram_access_token: token, instagram_user_id: userId } = cliente;
-
-  // Passo 1 — Criar container de mídia (nova Instagram Business API)
-  const containerRes = await axios.post(
-    `https://graph.facebook.com/v21.0/${userId}/media`,
-    null,
-    { params: { image_url: imagemUrl, caption: legenda, access_token: token } }
-  );
-  const creationId = containerRes.data.id;
-
-  // Passo 2 — Publicar container
-  await axios.post(
-    `https://graph.facebook.com/v21.0/${userId}/media_publish`,
-    null,
-    { params: { creation_id: creationId, access_token: token } }
-  );
-
-  // Confirmar via WhatsApp
-  const phoneDestino = telefoneCliente || cliente.telefone;
-  if (phoneDestino) {
-    const nome = cliente.nome_contato || cliente.nome || '';
-    await enviarWhatsApp(phoneDestino, `✅ Post publicado no Instagram${nome ? `, ${nome}` : ''}! Seu conteúdo está no ar 😊`);
-  }
-
-  console.log(`📸 Post publicado no Instagram — cliente ${clienteId}`);
-  return creationId;
-}
-// Meta Webhook Verification
-app.get('/webhook/instagram', (req, res) => {
-  const mode      = req.query['hub.mode'];
-  const token     = req.query['hub.verify_token'];
-  const challenge = req.query['hub.challenge'];
-
-  if (mode === 'subscribe' && token === process.env.META_VERIFY_TOKEN) {
-    console.log('✅ Meta webhook verificado');
-    return res.status(200).send(challenge);
-  }
-
-  console.warn('❌ Meta webhook verification falhou');
-  return res.status(403).send('Forbidden');
-});
-
-app.post('/webhook/instagram', (req, res) => {
-  res.status(200).send('EVENT_RECEIVED');
-  console.log('📨 Evento Meta:', JSON.stringify(req.body).substring(0, 200));
-});
-// ═══════════════════════════════════════
-// INSTAGRAM — ENDPOINTS
-// ═══════════════════════════════════════
-
-// OAuth callback — Meta redireciona aqui após o cliente autorizar
-app.get('/oauth/instagram/callback', async (req, res) => {
-  const { code, state: clienteId, error, error_reason, error_description } = req.query;
-
-  // Log completo — diagnóstico
-  console.log('[OAuth Callback] Recebido:', JSON.stringify({
-    temCode: !!code,
-    temState: !!clienteId,
-    clienteId: clienteId || 'VAZIO',
-    error: error || null,
-    error_reason: error_reason || null,
-    error_description: error_description || null,
-    queryKeys: Object.keys(req.query),
-  }));
-
-  if (error || !code || !clienteId) {
-    console.error('[OAuth] Cancelado — error:', error, '| temCode:', !!code, '| temState:', !!clienteId);
-    return res.send('<html><body style="font-family:sans-serif;text-align:center;padding:40px"><h2>❌ Autorização cancelada</h2><p>Pode fechar esta janela.</p></body></html>');
-  }
-
-  try {
-    console.log('[OAuth] Trocando code por token — redirect_uri:', process.env.META_REDIRECT_URI);
-
-    // graph.facebook.com aceita params como query string (não form-urlencoded)
-    const tokenRes = await axios.post(
-      'https://graph.facebook.com/v21.0/oauth/access_token',
-      null,
-      {
-        params: {
-          client_id:     process.env.META_APP_ID,
-          client_secret: process.env.META_APP_SECRET,
-          grant_type:    'authorization_code',
-          redirect_uri:  process.env.META_REDIRECT_URI,
-          code,
-        }
-      }
-    );
-
-    console.log('[OAuth] Token response:', JSON.stringify(tokenRes.data));
-
-    const { access_token: token } = tokenRes.data;
-
-    if (!token) {
-      throw new Error(`Token ausente na resposta: ${JSON.stringify(tokenRes.data)}`);
-    }
-
-    // Buscar o Instagram Business Account ID vinculado ao token
-    const meRes = await axios.get('https://graph.facebook.com/v21.0/me', {
-      params: {
-        fields: 'id,name,instagram_business_account',
-        access_token: token,
-      }
-    });
-
-    console.log('[OAuth] Me response:', JSON.stringify(meRes.data));
-
-    const instagramUserId = meRes.data?.instagram_business_account?.id || meRes.data?.id;
-
-    if (!instagramUserId) {
-      throw new Error(`Instagram user ID não encontrado: ${JSON.stringify(meRes.data)}`);
-    }
-
-    // Salvar token e user_id no Supabase
-    await supabase.from('clientes').update({
-      instagram_access_token: token,
-      instagram_user_id:      String(instagramUserId),
-    }).eq('id', clienteId);
-
-    // Buscar telefone do cliente e enviar confirmação via WhatsApp
-    const { data: cliente } = await supabase
-      .from('clientes')
-      .select('telefone, nome_contato, nome')
-      .eq('id', clienteId)
-      .maybeSingle();
-
-    if (cliente?.telefone) {
-      const nome = cliente.nome_contato || cliente.nome || '';
-      await enviarWhatsApp(
-        cliente.telefone,
-        `Instagram conectado com sucesso! ✅\n\nVou gerar conteúdo 3x por semana para você${nome ? `, ${nome}` : ''} 😊`
-      );
-    }
-
-    console.log(`[OAuth] ✅ Concluído — cliente ${clienteId}`);
-    res.send('<html><body style="font-family:sans-serif;text-align:center;padding:40px"><h2>✅ Instagram conectado!</h2><p>Pode fechar esta janela e voltar ao WhatsApp.</p></body></html>');
-
-  } catch (e) {
-    const status = e.response?.status || 'sem status';
-    const detail = e.response?.data ? JSON.stringify(e.response.data) : e.message;
-    console.error(`[OAuth] ❌ Erro [${status}]:`, detail);
-    const errorMsg = e.response?.data?.error?.message || 'Erro desconhecido';
-    res.send(`<html><body style="font-family:sans-serif;text-align:center;padding:40px"><h2>❌ Erro na autorização</h2><p>${errorMsg}</p><p>Verifique os logs do servidor.</p></body></html>`);
-  }
-});
-
-// Publicar post diretamente no Instagram do cliente
-app.post('/instagram/publicar', async (req, res) => {
-  const { cliente_id, imagem_url, legenda } = req.body;
-
-  if (!cliente_id || !imagem_url || !legenda) {
-    return res.status(400).json({ error: 'cliente_id, imagem_url e legenda são obrigatórios' });
-  }
-
-  try {
-    const creationId = await publicarPostInstagram(cliente_id, imagem_url, legenda, null);
-    return res.status(200).json({ ok: true, creation_id: creationId });
-  } catch (e) {
-    console.error('❌ Erro ao publicar Instagram:', e.response?.data || e.message);
-    return res.status(500).json({ error: e.message });
-  }
-});
-
-// Webhook do n8n — envia post para aprovação do cliente antes de publicar
-app.post('/instagram/aprovar-post', async (req, res) => {
-  const { cliente_id, imagem_url, legenda, hashtags } = req.body;
-
-  if (!cliente_id || !imagem_url || !legenda) {
-    return res.status(400).json({ error: 'cliente_id, imagem_url e legenda são obrigatórios' });
+  if (!cliente_id) {
+    return res.status(400).json({ error: 'cliente_id é obrigatório' });
   }
 
   try {
     const { data: cliente } = await supabase
       .from('clientes')
-      .select('telefone, nome_contato, nome')
+      .select('telefone, nome_contato, nome, segmento, cidade, servicos, diferencial')
       .eq('id', cliente_id)
       .maybeSingle();
 
-    if (!cliente?.telefone) {
+    if (!cliente) {
       return res.status(404).json({ error: 'Cliente não encontrado' });
     }
 
-    const legendaCompleta = hashtags ? `${legenda}\n\n${hashtags}` : legenda;
+    const prompt = buildPromptInstagram(cliente, mes);
+    const legendas = await chamarClaude(prompt, 'Gere as 12 legendas agora.', 4000);
 
-    // Salva post pendente no estado da conversa
-    await supabase.from('conversas_admin')
-      .update({
-        estado:        'aguardando_aprovacao_post_instagram',
-        acao_pendente: { imagem_url, legenda: legendaCompleta, cliente_id },
-      })
-      .eq('cliente_id', cliente_id);
+    // Salvar no Supabase
+    await supabase.from('instagram_conteudo').insert({
+      cliente_id,
+      mes: mes || new Date().getMonth(),
+      conteudo: legendas,
+      gerado_em: new Date().toISOString(),
+    }).catch(() => {}); // tabela opcional — não bloqueia se não existir
 
-    // Envia prévia para aprovação
+    // Enviar via WhatsApp em partes (3 legendas por mensagem)
+    const nome = cliente.nome_contato || cliente.nome || '';
+    const linhas = legendas.split('\n\n').filter(l => l.trim());
+    
     await enviarWhatsApp(
       cliente.telefone,
-      `📸 Aqui está seu post de hoje!\n\n${legendaCompleta}\n\nPosso publicar agora? Responda *SIM* para confirmar`
+      `📸 Aqui estão suas 12 legendas de Instagram deste mês, ${nome}! 😊\n\nSó copiar e postar no seu perfil na hora que quiser:`
+    );
+    await delay(1500);
+
+    // Enviar as legendas em blocos de 4 para não sobrecarregar
+    for (let i = 0; i < linhas.length; i += 4) {
+      const bloco = linhas.slice(i, i + 4).join('\n\n---\n\n');
+      await enviarWhatsApp(cliente.telefone, bloco);
+      if (i + 4 < linhas.length) await delay(2000);
+    }
+
+    await enviarWhatsApp(
+      cliente.telefone,
+      `Dica: poste 3x por semana para melhores resultados! 📈\nNo mês que vem gero mais 12 pra você 😊`
     );
 
-    console.log(`📸 Post enviado para aprovação — cliente ${cliente_id}`);
-    return res.status(200).json({ ok: true });
+    console.log(`📸 Conteúdo Instagram gerado e enviado — cliente ${cliente_id}`);
+    return res.status(200).json({ ok: true, legendas_geradas: linhas.length });
   } catch (e) {
-    console.error('❌ Erro ao enviar post para aprovação:', e.message);
+    console.error('❌ Erro ao gerar conteúdo Instagram:', e.message);
     return res.status(500).json({ error: e.message });
   }
 });
@@ -1650,6 +1505,66 @@ app.post('/receber-lead', async (req, res) => {
 // ═══════════════════════════════════════
 
 app.get('/', (req, res) => res.send('VitrineIA Admin — Yasmin ✅'));
+
+// ═══════════════════════════════════════
+// INSTAGRAM — RENOVAÇÃO DE TOKENS
+// Chamar 1x por semana via n8n ou cron
+// POST /instagram/renovar-tokens
+// ═══════════════════════════════════════
+
+app.post('/instagram/renovar-tokens', async (req, res) => {
+  try {
+    const { data: clientes } = await supabase
+      .from('clientes')
+      .select('id, instagram_access_token, instagram_user_id, telefone, nome_contato, nome')
+      .not('instagram_access_token', 'is', null)
+      .not('instagram_user_id', 'is', null);
+
+    if (!clientes?.length) return res.json({ renovados: 0, total: 0 });
+
+    let renovados = 0;
+    const erros = [];
+
+    for (const cliente of clientes) {
+      try {
+        const renovRes = await axios.get('https://graph.instagram.com/refresh_access_token', {
+          params: {
+            grant_type: 'ig_refresh_token',
+            access_token: cliente.instagram_access_token,
+          },
+        });
+
+        const novoToken = renovRes.data.access_token;
+        if (!novoToken) continue;
+
+        await supabase.from('clientes')
+          .update({ instagram_access_token: novoToken })
+          .eq('id', cliente.id);
+
+        renovados++;
+        console.log(`✅ Token Instagram renovado — cliente ${cliente.id}`);
+      } catch (e) {
+        // Token expirado — envia link de reconexão
+        console.warn(`⚠️ Token expirado — cliente ${cliente.id}`);
+        erros.push(cliente.id);
+
+        if (cliente.telefone) {
+          const oauthLink = buildInstagramOAuthLink(cliente.id);
+          const nome = cliente.nome_contato || cliente.nome || '';
+          await enviarWhatsApp(
+            cliente.telefone,
+            `Oi${nome ? ` ${nome}` : ''}! 😊 Preciso que você reconecte seu Instagram para continuar publicando automaticamente.\n\n👉 ${oauthLink}\n\nÉ rápido — só clicar e aprovar!`
+          );
+        }
+      }
+    }
+
+    return res.json({ renovados, erros: erros.length, total: clientes.length });
+  } catch (e) {
+    console.error('❌ Erro ao renovar tokens:', e.message);
+    return res.status(500).json({ error: e.message });
+  }
+});
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`🚀 Yasmin rodando na porta ${PORT}`));
