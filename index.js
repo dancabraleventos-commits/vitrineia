@@ -227,7 +227,7 @@ async function publicarVercel(slug, htmlContent) {
       }
     }
   );
-  return res.data.url ? `https://${res.data.url}` : `https://${slug}.vitrineia.com.br`;
+  return res.data.url ? `https://${res.data.url}` : `https://${slug}.vitrineia.app.br`;
 }
 
 // ═══════════════════════════════════════
