@@ -798,10 +798,11 @@ URL da página no ar: ${urlPagina || 'ainda não gerada'}
 INSTRUÇÕES:
 1. Se o cliente quer VER ou ACESSAR a página → responda EXATAMENTE com JSON: {"acao":"ver_pagina"}
 2. Se o cliente quer EDITAR a página (mudar preço, horário, serviço, texto, etc) → responda EXATAMENTE com JSON: {"acao":"editar","instrucao":"o que editar"}
-3. Se o cliente quer CANCELAR → seja gentil, tente entender o motivo, mas NUNCA dificulte. Se insistir: {"acao":"cancelar"}
-4. Se o cliente pergunta sobre ADD-ON que não tem → apresente naturalmente com preço
-5. Se é DÚVIDA ou CONVERSA → responda como Yasmin, curta e simpática
-6. Para qualquer resposta conversacional, responda diretamente como Yasmin (sem JSON)
+3. Se o cliente quer GERAR uma página NOVA ou RECRIAR do zero → responda EXATAMENTE com JSON: {"acao":"gerar_pagina"}
+4. Se o cliente quer CANCELAR → seja gentil, tente entender o motivo, mas NUNCA dificulte. Se insistir: {"acao":"cancelar"}
+5. Se o cliente pergunta sobre ADD-ON que não tem → apresente naturalmente com preço
+6. Se é DÚVIDA ou CONVERSA → responda como Yasmin, curta e simpática
+7. Para qualquer resposta conversacional, responda diretamente como Yasmin (sem JSON)
 
 IMPORTANTE: Mensagens CURTAS (máximo 3-4 linhas). Nunca mande textão.`;
 
@@ -812,25 +813,48 @@ IMPORTANTE: Mensagens CURTAS (máximo 3-4 linhas). Nunca mande textão.`;
     const parsed = JSON.parse(resposta.replace(/```json|```/g, '').trim());
 
     if (parsed.acao === 'editar') {
-      // Fluxo de edição (mantido do código original)
       await enviarWhatsApp(telefone, `⚙️ Entendido! Estou gerando a nova versão...\n\nIsso leva cerca de 30 segundos 😊`);
 
       const paginaAtual = await getHtmlAtual(cliente.id);
       if (!paginaAtual?.html_completo) {
-        await enviarWhatsApp(telefone, '❌ Não encontrei a página cadastrada. Vou verificar com a equipe!');
+        await enviarWhatsApp(telefone, '❌ Não encontrei a página cadastrada. Posso gerar uma nova — é só pedir! 😊');
         return;
       }
 
-      const htmlNovo = await chamarClaude(
-        `Você é especialista em HTML para landing pages.
+      // Edita o HTML e simultaneamente extrai campos alterados para salvar no Supabase
+      const [htmlNovo, camposRaw] = await Promise.all([
+        chamarClaude(
+          `Você é especialista em HTML para landing pages.
 NEGÓCIO: ${nomeNegocio} — ${categoria} — ${cidade}
 INSTRUÇÃO: "${parsed.instrucao}"
 HTML ATUAL:
 ${paginaAtual.html_completo}
 Aplique SOMENTE a alteração pedida. Mantenha todo estilo, cores e estrutura.
 Retorne APENAS o HTML completo modificado. Zero explicações.`,
-        parsed.instrucao, 16000
-      );
+          parsed.instrucao, 16000
+        ),
+        chamarClaude(
+          `Analise esta instrução de edição de página e extraia APENAS os campos de dados que foram alterados.
+INSTRUÇÃO: "${parsed.instrucao}"
+Retorne SOMENTE JSON com os campos alterados. Campos possíveis: nome, horarios, servicos, diferencial, endereco, whatsapp_negocio, segmento, cidade.
+Exemplo: {"horarios":"Seg a Sex 8h às 20h", "servicos":"Corte R0, Barba R5"}
+Se nenhum campo de dados foi alterado (ex: só mudou cor ou estilo), retorne: {}`,
+          parsed.instrucao, 300
+        )
+      ]);
+
+      // Atualizar dados no Supabase se houver campos alterados
+      try {
+        const camposAlterados = JSON.parse(camposRaw.replace(/```json|```/g, '').trim());
+        if (Object.keys(camposAlterados).length > 0) {
+          await supabase.from('clientes')
+            .update({ ...camposAlterados, updated_at: new Date().toISOString() })
+            .eq('id', cliente.id);
+          console.log('[Editar] Campos atualizados no Supabase:', Object.keys(camposAlterados));
+        }
+      } catch(e) {
+        console.warn('[Editar] Não foi possível extrair campos alterados:', e.message);
+      }
 
       await setEstado(telefone, 'aguardando_aprovacao_pagina', {
         html_novo: htmlNovo,
@@ -855,6 +879,59 @@ Retorne APENAS o HTML completo modificado. Zero explicações.`,
         await enviarWhatsApp(telefone, `Ainda não encontrei sua página cadastrada, ${nomeContato} 🤔 Vou verificar com a equipe e te aviso em breve!`);
       }
       await salvarHistorico(telefone, 'assistant', urlPagina ? `Enviei o link da página: ${urlPagina}` : 'Página não encontrada, verificando.');
+      return;
+    }
+
+    if (parsed.acao === 'gerar_pagina') {
+      // Recriar página do zero usando dados atuais do cliente no Supabase
+      await enviarWhatsApp(telefone, `Certo, ${nomeContato}! Vou gerar sua página agora 😊\n\nIsso leva cerca de 1 minutinho...`);
+      await salvarHistorico(telefone, 'assistant', 'Iniciando geração de nova página.');
+
+      try {
+        const whatsappLimpo = (cliente.whatsapp_negocio || telefoneLimpo || telefone).replace(/\D/g, '');
+        const htmlCompleto = await chamarClaude(
+          PROMPT_GERAR_PAGINA,
+          `Crie a landing page para este negócio:\n\nNome: ${cliente.nome || nomeNegocio}\nCategoria: ${cliente.segmento || categoria}\nCidade: ${cliente.cidade || cidade}\nWhatsApp: ${whatsappLimpo}\nHorário: ${cliente.horarios || 'a confirmar'}\nServiços: ${cliente.servicos || 'consultar pelo WhatsApp'}\nDiferencial: ${cliente.diferencial || 'Qualidade e bom atendimento'}`,
+          16000
+        );
+
+        const slug = (cliente.nome || nomeNegocio || 'negocio')
+          .toLowerCase()
+          .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/^-|-$/g, '')
+          .substring(0, 40);
+
+        const url = await publicarVercel(slug, htmlCompleto);
+
+        // Salvar nova página no Supabase
+        await supabase.from('paginas').insert({
+          cliente_id: cliente.id,
+          slug,
+          html_completo: htmlCompleto,
+          url_publica: url,
+          titulo: cliente.nome || nomeNegocio,
+          publicada: true
+        });
+
+        await setEstado(telefone, 'aguardando_aprovacao_onboarding', {
+          html_novo: htmlCompleto,
+          html_original: htmlCompleto,
+          slug,
+          url_atual: url
+        });
+
+        await salvarHistorico(telefone, 'assistant', `Página gerada: ${url}`);
+        await enviarComDelay(telefone, [
+          `Pronto, ${nomeContato}! Sua nova página ficou assim 🎉`,
+          `👉 ${url}`,
+          `Dá uma olhada e me fala se ficou bom ou se quer mudar alguma coisa 😊`
+        ]);
+      } catch(e) {
+        console.error('❌ Erro ao gerar página no suporte:', e.message);
+        await enviarWhatsApp(telefone, `Ops, tive um probleminha técnico 😅 Tenta de novo em alguns minutinhos!`);
+        await setEstado(telefone, 'aguardando_instrucao', null);
+      }
       return;
     }
 
